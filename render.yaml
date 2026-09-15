@@ -1,0 +1,20 @@
+# Render.com 一键部署（免费 Web Service）
+# 连接 Git 仓库后选择此文件即可
+services:
+  - type: web
+    name: wangxia-club
+    runtime: python
+    plan: free
+    buildCommand: "true"
+    startCommand: python3 server.py
+    envVars:
+      - key: PORT
+        value: 8765
+      - key: ADMIN_USER
+        value: 王下七武海
+      - key: ADMIN_PASSWORD
+        sync: false
+    disk:
+      name: club-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1

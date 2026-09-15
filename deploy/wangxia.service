@@ -1,0 +1,18 @@
+[Unit]
+Description=Wangxia Club (王下七武海)
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/wangxia-club
+EnvironmentFile=-/opt/wangxia-club/.env
+ExecStart=/usr/bin/python3 /opt/wangxia-club/server.py
+Restart=always
+RestartSec=3
+# 给 OCR / COS 出网留足时间
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

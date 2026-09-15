@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>王下七武海 · 俱乐部管理</title>
+<link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Serif+SC:wght@400;600;700;900&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="css/styles.css?v=20260915s">
+</head>
+<body data-theme="mist" data-page="overview">
+<div class="app">
+  <!-- ===== 侧边导航 ===== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-seal"><b>VII</b></div>
+      <div class="brand-name">
+        <h1>王下七武海</h1>
+        <p>BEYONDERS' ARCHIVE</p>
+      </div>
+    </div>
+    <nav class="nav">
+      <div class="nav-label">— 导航 —</div>
+      <div class="nav-item active" data-page="overview">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        总览
+      </div>
+      <div class="nav-item" data-page="archive">
+        <svg viewBox="0 0 24 24"><path d="M4 4h16v4H4z"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
+        成员档案
+      </div>
+      <div class="nav-item" data-page="squads">
+        <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.7-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.5" cy="9" r="2.6"/><path d="M15.5 14.2c2.6.3 4.4 1.9 5 4.8"/></svg>
+        团队编组
+      </div>
+      <div class="nav-item" data-page="dkp">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v10M15 9.2c-.6-1-1.7-1.6-3-1.6-1.8 0-3 .9-3 2.3 0 3.2 6 1.3 6 4.5 0 1.4-1.3 2.4-3.2 2.4-1.4 0-2.6-.7-3.1-1.8"/></svg>
+        DKP管理
+      </div>
+      <div class="nav-item" data-page="league">
+        <svg viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg>
+        联赛分析
+      </div>
+      <div class="nav-item" data-page="forum">
+        <svg viewBox="0 0 24 24"><path d="M4 5h16v10H8l-4 4z"/></svg>
+        论坛分享
+      </div>
+      <div class="nav-item" data-page="settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/></svg>
+        系统设置
+      </div>
+    </nav>
+    <div class="side-foot">
+      <div class="sync" id="syncStatus"><span class="dot"></span>正在连接服务器…</div>
+      <div class="ver">王下七武海俱乐部</div>
+    </div>
+  </aside>
+  <div class="mask-side" id="maskSide"></div>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main">
+    <header class="topbar">
+      <div class="tb-title">
+        <h2>王下七武海 · 俱乐部管理</h2>
+        <p>王下七武海数据总览</p>
+      </div>
+      <div class="tb-right">
+        <div class="online" id="onlineBadge" title="工会共享数据"><span class="dot"></span>共享数据</div>
+        <div class="btn" id="loginBtn"><svg class="lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span id="loginTxt">管理员登录</span></div>
+        <div class="theme-sel" id="themeSel">
+          <div class="sel-box" role="button" tabindex="0">界面主题 <span id="themeName">迷雾金绿</span> <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>
+          <div class="theme-menu">
+            <div class="theme-opt" role="button" tabindex="0" data-theme-val="mist"><span class="sw sw-mist"></span>迷雾金绿</div>
+            <div class="theme-opt" role="button" tabindex="0" data-theme-val="gold"><span class="sw sw-gold"></span>鎏金暗夜</div>
+            <div class="theme-opt" role="button" tabindex="0" data-theme-val="abyss"><span class="sw sw-abyss"></span>深渊幽蓝</div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ===== 视图：总览 ===== -->
+    <div class="page active" id="page-overview">
+      <div class="crumb"><span class="link" id="crumbHome">王下七武海</span> <span class="sep">/</span> <b id="crumbCurrent">成员档案</b></div>
+
+      <div class="slogan">
+        <div class="l1">剑锋所指凌九霄，七武海上问英豪。</div>
+        <div class="l2">迷雾之上，记录每一次贡献与晋升。</div>
+        <div class="rule"></div>
+      </div>
+
+      <div class="event-banner" id="eventBanner" hidden>
+        <div class="event-banner-head">
+          <span class="en">Upcoming</span>
+          <h3>近期活动</h3>
+          <div class="panel-link" data-goto="dkp">前往 DKP <svg viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6"/></svg></div>
+        </div>
+        <div class="event-banner-list" id="eventBannerList"></div>
+      </div>
+
+      <div class="stats-hero stats-hero-3">
+        <div class="card" data-tip="王下七武海登记成员">
+          <div class="c-label">总登记人数</div>
+          <div class="c-value" id="vTotalReg">—</div>
+          <div class="c-note">王下七武海全员</div>
+        </div>
+        <div class="card" data-tip="全员非凡评分总和">
+          <div class="c-label">总非凡评分</div>
+          <div class="c-value" id="vTotalScore">—</div>
+          <div class="c-note"><span class="accent">全员评分总和</span></div>
+        </div>
+        <div class="card" data-tip="按有评分成员计算的平均非凡评分">
+          <div class="c-label">平均非凡评分</div>
+          <div class="c-value" id="vAvgScore">—</div>
+          <div class="c-note">按有评分成员计算</div>
+        </div>
+      </div>
+
+      <div class="panels">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><span class="en">Combat Readiness</span><h3>战团状态</h3></div>
+            <div class="panel-link" data-goto="squads">查看编组 <svg viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6"/></svg></div>
+          </div>
+          <div id="squadList"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><span class="en">Pathway Distribution</span><h3>途径分布</h3></div>
+          </div>
+          <div id="pathChart"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 视图：成员档案（已接入，本地存储） ===== -->
+    <div class="page" id="page-archive">
+      <div class="crumb"><span class="link" id="crumbHome2">王下七武海</span> <span class="sep">/</span> <b id="crumbCurrent2">成员档案</b></div>
+
+      <div class="arch-head">
+        <div>
+          <h2>成员档案</h2>
+          <div class="sub">成员档案仅管理员可查看与编辑。未登录时点击将提示登录。</div>
+        </div>
+        <div class="arch-mini">
+          <div class="mini-chip">已登记 <b id="mTotal">0</b><span class="u">人</span></div>
+          <div class="mini-chip">在帮 <b id="mIn">0</b><span class="u">人</span></div>
+          <div class="mini-chip">平均评分 <b id="mAvg">—</b></div>
+        </div>
+      </div>
+
+      <div class="arch-bar">
+        <div class="search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+          <input id="mSearch" placeholder="搜索姓名 / 途径">
+        </div>
+        <select class="sel" id="fSquad">
+          <option value="">全部战团</option>
+          <option value="一团">一团</option><option value="二团">二团</option><option value="三团">三团</option>
+          <option value="未编组">未编组</option>
+        </select>
+        <select class="sel" id="fPathway">
+          <option value="">全部途径</option>
+        </select>
+        <div class="btn-add" id="mAddBtn">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新增成员
+        </div>
+      </div>
+
+      <div class="arch-count">共 <b id="mCount">0</b> 条记录</div>
+
+      <div class="arch-table-wrap" id="mWrap"></div>
+    </div>
+
+    <!-- ===== 视图：团队编组 ===== -->
+    <div class="page" id="page-squads">
+      <div class="crumb"><span class="link" id="crumbHomeSquads">王下七武海</span> <span class="sep">/</span> <b>团队编组</b></div>
+      <div id="squadsRoot"></div>
+    </div>
+
+    <!-- ===== 视图：DKP / 考勤 ===== -->
+    <div class="page" id="page-dkp">
+      <div class="crumb"><span class="link" id="crumbHomeDkp">王下七武海</span> <span class="sep">/</span> <b>DKP管理</b></div>
+
+      <div class="arch-head">
+        <div>
+          <h2>活动考勤</h2>
+          <div class="sub">按活动场次点名记录出勤。访客可查看，管理员登录后可点名。</div>
+        </div>
+        <div class="arch-mini">
+          <div class="mini-chip">活动场次 <b id="dkpEventCount">0</b></div>
+        </div>
+      </div>
+
+      <div class="arch-bar">
+        <div class="dkp-bar-hint">创建活动 → 点名勾选出勤 / 请假 / 缺席</div>
+        <div class="btn-add" id="dkpAddBtn">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新建活动
+        </div>
+      </div>
+
+      <div class="dkp-empty" id="dkpEmpty">
+        <div class="arch-empty">
+          <div class="e-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v10M15 9.2c-.6-1-1.7-1.6-3-1.6-1.8 0-3 .9-3 2.3 0 3.2 6 1.3 6 4.5 0 1.4-1.3 2.4-3.2 2.4-1.4 0-2.6-.7-3.1-1.8"/></svg></div>
+          暂无活动场次，点击上方按钮开始创建
+        </div>
+      </div>
+      <div class="dkp-list" id="dkpEventList"></div>
+    </div>
+
+    <!-- ===== 视图：联赛分析 ===== -->
+    <div class="page" id="page-league">
+      <div class="crumb"><span class="link" id="crumbHomeLeague">王下七武海</span> <span class="sep">/</span> <b>联赛分析</b></div>
+      <div id="leagueRoot"></div>
+    </div>
+
+    <!-- ===== 视图：论坛分享 ===== -->
+    <div class="page" id="page-forum">
+      <div class="crumb"><span class="link" id="crumbHomeForum">王下七武海</span> <span class="sep">/</span> <b>论坛分享</b></div>
+      <div id="forumRoot"></div>
+    </div>
+
+    <!-- ===== 视图：系统设置 ===== -->
+    <div class="page" id="page-settings">
+      <div class="crumb"><span class="link" id="crumbHomeSettings">王下七武海</span> <span class="sep">/</span> <b>系统设置</b></div>
+      <div class="arch-head">
+        <div>
+          <h2>系统设置</h2>
+          <div class="sub">备份导出、数据导入与账号说明。</div>
+        </div>
+      </div>
+      <div id="settingsBody" class="settings-wrap"></div>
+    </div>
+
+    <!-- ===== 视图：占位页（由 JS 渲染标题） ===== -->
+    <div class="page placeholder-page" id="page-placeholder">
+      <div class="ph-badge" id="phIcon"></div>
+      <h2 id="phTitle"></h2>
+      <p id="phDesc"></p>
+      <div class="ph-note">该模块尚未接入</div>
+      <div class="back-btn" id="backHome">返回总览</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 登录弹窗 ===== -->
+<div class="modal-mask" id="loginMask">
+  <div class="modal">
+    <div class="m-close" id="loginClose"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+    <h3>管理员登录</h3>
+    <div class="m-sub">账号：王下七武海（密码由管理员配置）</div>
+    <div class="field"><label>账号</label><input id="accInput" placeholder="请输入管理员账号"></div>
+    <div class="field"><label>密码</label><input id="pwdInput" type="password" placeholder="请输入密码"></div>
+    <div class="btn" id="loginSubmit">登 录</div>
+  </div>
+</div>
+
+<!-- ===== 成员录入/编辑弹窗 ===== -->
+<div class="modal-mask" id="memberMask">
+  <div class="modal member-modal">
+    <div class="m-close" id="memberClose"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+    <h3 id="memberModalTitle">新增成员</h3>
+    <div class="m-sub">BEYONDERS' ARCHIVE · 成员档案</div>
+    <div class="member-grid">
+      <div class="field full"><label>姓名 <span style="color:var(--gold)">*</span></label><input id="mName" placeholder="输入成员姓名"></div>
+      <div class="field"><label>战团（位置）</label>
+        <select id="mSquad">
+          <option value="未编组">未编组</option>
+          <option value="一团">一团</option><option value="二团">二团</option><option value="三团">三团</option>
+        </select>
+      </div>
+      <div class="field"><label>途径</label>
+        <select id="mPathway"></select>
+      </div>
+      <div class="field"><label>非凡评分</label><input id="mScore" type="number" min="0" step="1" placeholder="0"></div>
+      <div class="field full"><label>状态</label>
+        <select id="mStatus"><option value="在帮">在帮</option><option value="待入帮">待入帮</option></select>
+      </div>
+    </div>
+    <div class="btn primary" id="mSaveBtn">保 存</div>
+  </div>
+</div>
+
+<!-- ===== 删除确认弹窗 ===== -->
+<div class="modal-mask" id="confirmMask">
+  <div class="modal" style="width:min(330px,100%);text-align:center">
+    <h3>确认删除</h3>
+    <div class="m-sub" id="confirmMsg">确认删除？</div>
+    <div style="display:flex;gap:10px;margin-top:24px">
+      <div class="btn" id="confirmCancel" style="flex:1;justify-content:center">取 消</div>
+      <div class="btn" id="confirmOk" style="flex:1;justify-content:center;color:#0b0e0c;border:none;font-weight:600;background:linear-gradient(135deg,#d98a6f,#c96a5a)">删 除</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 新建/编辑活动 ===== -->
+<div class="modal-mask" id="eventMask">
+  <div class="modal member-modal">
+    <div class="m-close" id="eventClose"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+    <h3 id="eventModalTitle">新建活动</h3>
+    <div class="m-sub">BEYONDERS' ARCHIVE · 活动考勤</div>
+    <div class="member-grid">
+      <div class="field"><label>日期 <span style="color:var(--gold)">*</span></label><input id="evDate" type="date"></div>
+      <div class="field"><label>活动类型 <span style="color:var(--gold)">*</span></label>
+        <select id="evType">
+          <option value="终末猎杀">终末猎杀</option>
+          <option value="四方联赛">四方联赛</option>
+          <option value="俱乐部宣战">俱乐部宣战</option>
+          <option value="猎城战">猎城战</option>
+          <option value="高原战">高原战</option>
+          <option value="其他">其他</option>
+        </select>
+      </div>
+      <div class="field full" id="evNameWrap" hidden>
+        <label>自定义名称 <span style="color:var(--gold)">*</span></label>
+        <input id="evName" placeholder="填写活动名称">
+      </div>
+      <div class="field full"><label>备注</label><input id="evNote" placeholder="可选"></div>
+    </div>
+    <div class="btn primary" id="evSaveBtn">保 存</div>
+  </div>
+</div>
+
+<!-- ===== 点名弹窗 ===== -->
+<div class="modal-mask" id="rollMask">
+  <div class="modal roll-modal">
+    <div class="m-close" id="rollClose"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+    <h3 id="rollTitle">点名</h3>
+    <div class="m-sub" id="rollSub"></div>
+    <div class="roll-toolbar">
+      <select class="sel" id="rollPathway">
+        <option value="">全部途径</option>
+      </select>
+      <div class="roll-actions" id="rollActions">
+        <button type="button" class="roll-tool" id="rollUnsetPresent">未登→出勤</button>
+        <button type="button" class="roll-tool" id="rollAllPresent">全员出勤</button>
+        <button type="button" class="roll-tool danger" id="rollClear">清空</button>
+      </div>
+    </div>
+    <div class="roll-summary" id="rollSummary"></div>
+    <div class="roll-list" id="rollList"></div>
+  </div>
+</div>
+
+<!-- ===== 成员个人考勤摘要 ===== -->
+<div class="modal-mask" id="attMemberMask">
+  <div class="modal roll-modal" style="width:min(480px,100%)">
+    <div class="m-close" id="attMemberClose"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+    <h3 id="attMemberTitle">考勤</h3>
+    <div class="m-sub" id="attMemberSub"></div>
+    <div id="attMemberBody"></div>
+    <div class="btn primary" id="attGotoDkp" style="margin-top:18px">前往 DKP 点名</div>
+  </div>
+</div>
+
+<div class="modal-mask" id="squadMetaMask">
+  <div class="modal member-modal">
+    <div class="m-close" id="squadMetaClose"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+    <h3>设置战团</h3>
+    <div class="m-sub" id="sqMetaRegLabel">当前：一团</div>
+    <div class="field"><label>显示名称</label><input id="sqMetaTitle" maxlength="20" placeholder="例如：一团·猎杀"></div>
+    <div class="field"><label>团长</label><div id="sqMetaLeader" class="squad-leader-pick"></div></div>
+    <div class="btn primary" id="squadMetaSave">保 存</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="js/data.js?v=20260915s"></script>
+<script src="js/api.js?v=20260915s"></script>
+<script src="js/members.js?v=20260915s"></script>
+<script src="js/attendance.js?v=20260915s"></script>
+<script src="js/squads.js?v=20260915s"></script>
+<script src="js/league.js?v=20260915s"></script>
+<script src="js/forum.js?v=20260915s"></script>
+<script src="js/app.js?v=20260915s"></script>
+</body>
+</html>
