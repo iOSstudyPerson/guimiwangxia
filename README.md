@@ -2,37 +2,121 @@
 
 工会公共网页：任何人打开链接都能看总览 / DKP / 论坛；**成员档案仅管理员登录后可查看与编辑**。
 
-## 本机先跑起来
+## 线上地址（阿里云）
+
+工会日常入口：
+
+**http://139.224.224.26:8765/**
+
+- 代码仓库：[https://github.com/iOSstudyPerson/guimiwangxia](https://github.com/iOSstudyPerson/guimiwangxia)
+- 服务器目录：`/opt/wangxia-club`
+- 环境变量（密码 / COS）：服务器上的 `/opt/wangxia-club/.env`（**不要**提交到 Git）
+- 数据库：服务器上的 `/opt/wangxia-club/data/club.db`（**不要**提交到 Git）
+
+首次部署与防火墙说明见 **[deploy/README.md](deploy/README.md)**。
+
+---
+
+## 本机先跑起来（自测）
 
 ```bash
+cd ~/Desktop/wangxia-club   # 或你的项目目录
 ./start.sh
 ```
 
 打开 [http://127.0.0.1:8765/](http://127.0.0.1:8765/)
 
 - 访客：不用登录可看总览 / DKP / 论坛；成员档案需管理员登录
-- 管理员：`王下七武海` / `123456`（请上线后改强密码）
+- 本机管理员账号见本地 `.env` 的 `ADMIN_USER` / `ADMIN_PASSWORD`
+- **改功能时先在本机测通**，再推到云服务器，避免直接弄坏线上
+
 ---
 
-## 做成真正的公共网页（推荐）
+## 日常如何更新代码（自测 → GitHub → 云服务器）
 
-需要一台**公网可访问**的主机（不是同一 Wi‑Fi）。任选其一：
+### 1. 本机改代码并自测
 
-### 方案 A：阿里云 + GitHub（推荐）
+```bash
+cd ~/Desktop/wangxia-club
+./start.sh
+```
 
-完整步骤见 **[deploy/README.md](deploy/README.md)**。摘要：
+浏览器打开 http://127.0.0.1:8765/ ，确认新功能 / 联赛 / 论坛等正常。
 
-1. 代码推到 GitHub（建议私有仓库）
-2. 阿里云 Ubuntu 机器放行 `8765`，执行 `deploy/setup-server.sh`
-3. 编辑服务器 `/opt/wangxia-club/.env`（强密码 + COS）
-4. 以后本机 `git push`，服务器 `sudo bash deploy/update.sh`
+### 2. 提交并推送到 GitHub
+
+```bash
+git status
+git add -A
+git commit -m "说明这次改了什么"
+git push origin main
+```
+
+推送时若要密码：Username 填 `iOSstudyPerson`，Password 填 GitHub **Personal Access Token**（不是登录密码）。
+
+### 3. 更新阿里云服务器
+
+SSH 登录服务器后执行：
+
+```bash
+ssh root@139.224.224.26
+sudo bash /opt/wangxia-club/deploy/update.sh
+```
+
+脚本会：`git pull` + 重启 `wangxia` 服务。  
+`.env` 和 `data/club.db` 留在服务器，**不会**被覆盖。
+
+更新后打开线上地址确认：http://139.224.224.26:8765/  
+（建议强制刷新或清缓存。）
+
+### 4. 若只改了服务器上的配置
+
+只改密码 / COS 时，编辑后重启即可，不必走 Git：
+
+```bash
+sudo nano /opt/wangxia-club/.env
+sudo systemctl restart wangxia
+```
+
+### 5. 若本机有新数据要覆盖到线上（慎用）
+
+会覆盖服务器现有数据库，先备份：
+
+```bash
+# 服务器上备份
+ssh root@139.224.224.26 'cp /opt/wangxia-club/data/club.db /opt/wangxia-club/data/club.db.bak-$(date +%F)'
+
+# 本机上传
+scp ~/Desktop/wangxia-club/data/club.db root@139.224.224.26:/opt/wangxia-club/data/club.db
+ssh root@139.224.224.26 'chown www-data:www-data /opt/wangxia-club/data/club.db && systemctl restart wangxia'
+```
+
+---
+
+## 怎么换网址？
+
+当前是 **IP + 端口**：`http://139.224.224.26:8765/`。  
+想变成 `https://xxx.com/` 这类短链接，需要：
+
+1. 购买域名  
+2. 大陆服务器一般还需 **ICP 备案**  
+3. DNS 把域名解析到 `139.224.224.26`  
+4. 服务器安装 Nginx，把 80/443 反代到本机 `8765`（可选 HTTPS）
+
+详细命令见 [deploy/README.md](deploy/README.md) 第七节。  
+**在未备案 / 未买域名前，继续把上面的 IP 链接发给工会即可**；换域名后只要改 DNS + Nginx，工会改用新域名，代码更新流程不变。
+
+若阿里云更换了公网 IP，需要：
+
+1. 控制台确认新 IP，防火墙仍放行 `8765`（和 `22`）  
+2. 把本 README 里的线上地址改成新 IP  
+3. 重新通知工会新链接  
+
+---
+
+## 其它上线方式（备选）
 
 ### 方案 B：其它云主机手动跑
-
-1. 买一台轻量云（腾讯云 / 阿里云，约几十元/月）
-2. 把本项目上传到服务器
-3. 开放安全组端口（如 `8765` 或 `80`）
-4. 运行：
 
 ```bash
 export ADMIN_USER='王下七武海'
@@ -41,45 +125,17 @@ export PORT=8765
 python3 server.py
 ```
 
-把 `http://服务器公网IP:8765/` 发给工会即可（可再绑域名，用 Nginx 反代到 80/443）。
-
-用 `systemd`（见 `deploy/wangxia.service`）或 `screen` 保活。  
-**链接固定**，不需要每次重新生成。
-
 ### 方案 C：Render 免费托管（海外，国内可能稍慢）
 
-1. 把代码推到 GitHub
-2. 打开 [https://render.com](https://render.com) → New → Web Service → 选仓库
-3. Start Command：`python3 server.py`
-4. 环境变量设置 `ADMIN_USER`、`ADMIN_PASSWORD`
-5. 部署完成后得到 `https://xxx.onrender.com` 公共链接（相对固定）
-
-注意：免费实例会休眠；SQLite 无持久盘时重启可能丢数据，正式用建议方案 A。
+GitHub 连 Render；免费实例会休眠，正式用仍建议阿里云。
 
 ### 方案 D：临时公网隧道（仅试用）
 
-本机已运行 `./start.sh` 时：
-
 ```bash
 ./public.sh
-# 或：./bin/cloudflared tunnel --url http://127.0.0.1:8765
 ```
 
-会生成一个 `https://xxxx.trycloudflare.com` 链接。
-
-**关于「每次都要重新生成吗？」——是的，临时隧道有这些限制：**
-
-
-| 情况                 | 结果                 |
-| ------------------ | ------------------ |
-| 关掉隧道命令 / 关掉终端      | 链接立刻失效             |
-| 电脑关机或休眠断网          | 链接失效               |
-| 再次运行 `./public.sh` | **会生成新地址**（和上次不一样） |
-| 本机 `./start.sh` 没开 | 公网打开会失败            |
-
-
-因此方案 D **不适合**当作工会日常固定入口，只适合「今天临时给几个人看一眼」。  
-日常使用请上 **方案 A（阿里云 + GitHub）**，链接长期不变。
+链接会变、电脑关机即失效，**不要**当工会日常入口。
 
 ---
 

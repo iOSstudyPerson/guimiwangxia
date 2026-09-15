@@ -1,5 +1,10 @@
 # 阿里云 + GitHub 部署指南
 
+**当前线上地址：http://139.224.224.26:8765/**  
+仓库：https://github.com/iOSstudyPerson/guimiwangxia  
+
+日常更新（自测 → push → 服务器）见仓库根目录 [README.md](../README.md)。
+
 本项目是「静态前端 + Python `server.py`」，适合阿里云轻量应用服务器 / ECS。
 
 ## 一、本机：推到 GitHub
