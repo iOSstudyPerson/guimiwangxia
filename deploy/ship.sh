@@ -12,6 +12,7 @@
 #   DEPLOY_USER=root
 #   DEPLOY_PATH=/opt/wangxia-club
 #   DEPLOY_BRANCH=main
+#   DEPLOY_SSH_PASSWORD=...   # 有密码时用 expect 登录（勿提交该文件）
 #   DEPLOY_SSH_OPTS="-o ConnectTimeout=15"
 
 set -euo pipefail
@@ -25,6 +26,7 @@ DEPLOY_USER="${DEPLOY_USER:-root}"
 DEPLOY_PATH="${DEPLOY_PATH:-/opt/wangxia-club}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 DEPLOY_SSH_OPTS="${DEPLOY_SSH_OPTS:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=20}"
+DEPLOY_SSH_PASSWORD="${DEPLOY_SSH_PASSWORD:-}"
 LIVE_URL="${LIVE_URL:-http://${DEPLOY_HOST}:8765/}"
 
 if [[ -f "$ROOT/deploy/ship.local.env" ]]; then
@@ -159,15 +161,70 @@ fi
 log "步骤 3/3 · 更新云服务器（git pull + 重启，不碰 .env / club.db）"
 command -v ssh >/dev/null || die "未找到 ssh"
 
-# 注意：远程命令用单引号包裹，避免本机展开
-REMOTE_CMD='set -euo pipefail; cd '"'"${DEPLOY_PATH}"'"' && sudo bash deploy/update.sh && echo REMOTE_HEAD=$(git rev-parse --short HEAD)'
+# 路径用 printf %q；远程 git 用 \$ 防止本机展开
+REMOTE_CMD="set -euo pipefail; cd $(printf '%q' "$DEPLOY_PATH") && sudo bash deploy/update.sh && echo REMOTE_HEAD=\$(git rev-parse --short HEAD)"
+
+# 通过 SSH 执行远程命令；若配置了 DEPLOY_SSH_PASSWORD 则用 expect 输密码（密码不打印）
+remote_ssh() {
+  local cmd="$1"
+  if [[ -n "${DEPLOY_SSH_PASSWORD}" ]]; then
+    command -v expect >/dev/null || die "已配置 DEPLOY_SSH_PASSWORD，但未找到 expect（macOS 一般自带 /usr/bin/expect）"
+    log "使用密码登录 ${DEPLOY_USER}@${DEPLOY_HOST}（密码来自 ship.local.env，不会打印）"
+    # 强制走密码，避免先试公钥多次失败
+    local pass_opts="-o PreferredAuthentications=password -o PubkeyAuthentication=no"
+    EXPECT_PASS="$DEPLOY_SSH_PASSWORD" EXPECT_USER="$DEPLOY_USER" EXPECT_HOST="$DEPLOY_HOST" \
+    EXPECT_OPTS="$DEPLOY_SSH_OPTS $pass_opts" EXPECT_CMD="$cmd" \
+    expect <<'EXPECT_EOF'
+set timeout 120
+set pass $env(EXPECT_PASS)
+set user $env(EXPECT_USER)
+set host $env(EXPECT_HOST)
+set opts $env(EXPECT_OPTS)
+set rcmd $env(EXPECT_CMD)
+spawn ssh {*}$opts $user@$host $rcmd
+expect {
+  -re "(?i)are you sure you want to continue connecting" {
+    send "yes\r"
+    exp_continue
+  }
+  -re "(?i)password:" {
+    send -- "$pass\r"
+  }
+  eof {
+    catch wait result
+    set code [lindex $result 3]
+    if {$code != 0} { exit $code }
+    exit 0
+  }
+  timeout {
+    puts stderr "SSH 超时"
+    exit 1
+  }
+}
+expect {
+  eof {
+    catch wait result
+    exit [lindex $result 3]
+  }
+  timeout {
+    puts stderr "SSH 命令执行超时"
+    exit 1
+  }
+}
+EXPECT_EOF
+  else
+    log "使用密钥/已有凭据登录 ${DEPLOY_USER}@${DEPLOY_HOST}"
+    # shellcheck disable=SC2086
+    ssh ${DEPLOY_SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" "$cmd"
+  fi
+}
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "(dry-run) ssh ${DEPLOY_USER}@${DEPLOY_HOST} → ${DEPLOY_PATH}/deploy/update.sh"
+  [[ -n "${DEPLOY_SSH_PASSWORD}" ]] && log "(dry-run) 将使用 ship.local.env 中的密码登录"
 else
-  # shellcheck disable=SC2086
-  if ! ssh ${DEPLOY_SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" "$REMOTE_CMD"; then
-    die "服务器更新失败。请确认：1) SSH 能登录 ${DEPLOY_USER}@${DEPLOY_HOST}  2) 服务器上 ${DEPLOY_PATH} 存在  3) 有 sudo 权限跑 update.sh"
+  if ! remote_ssh "$REMOTE_CMD"; then
+    die "服务器更新失败。请确认：1) SSH 能登录 ${DEPLOY_USER}@${DEPLOY_HOST}  2) ship.local.env 密码正确  3) ${DEPLOY_PATH} 存在且可 sudo update.sh"
   fi
   ok "云服务器代码已更新并重启服务"
 fi
