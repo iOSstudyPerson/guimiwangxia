@@ -34,6 +34,43 @@ cd ~/Desktop/wangxia-club   # 或你的项目目录
 
 ## 日常如何更新代码（自测 → GitHub → 云服务器）
 
+### 推荐：一键发布（日常就用这个）
+
+本机自测通过后，在项目根目录执行：
+
+```bash
+cd ~/Desktop/wangxia-club
+./deploy/ship.sh -m "说明这次改了什么"
+```
+
+脚本会打印每步日志，并依次完成：
+
+1. 提交本地改动（有改动时必须带 `-m`）
+2. `git push` 到 GitHub `main`
+3. SSH 登录云服务器执行 `deploy/update.sh`（`git pull` + 重启服务）
+4. 探测线上 `http://139.224.224.26:8765/` 是否可访问
+
+**不会**覆盖服务器上的 `.env` 和 `data/club.db`。
+
+常用变体：
+
+```bash
+./deploy/ship.sh                 # 没有未提交改动时，只 push + 更新服务器
+./deploy/ship.sh --server-only   # 只更新服务器（GitHub 已推过）
+./deploy/ship.sh --push-only     # 只推 GitHub，不碰服务器
+./deploy/ship.sh --dry-run -m "试跑"   # 只看将要做什么，不真正执行
+```
+
+若 SSH 账号 / IP / 密钥不同，复制配置后修改（此文件已 gitignore，不会进仓库）：
+
+```bash
+cp deploy/ship.env.example deploy/ship.local.env
+# 编辑 deploy/ship.local.env
+```
+
+发布前请确认：本机能 `git push`，且能 SSH 登录 `root@139.224.224.26`。  
+发布后请浏览器强制刷新（Cmd+Shift+R）打开：http://139.224.224.26:8765/
+
 ### 1. 本机改代码并自测
 
 ```bash
@@ -43,7 +80,9 @@ cd ~/Desktop/wangxia-club
 
 浏览器打开 http://127.0.0.1:8765/ ，确认新功能 / 联赛 / 论坛等正常。
 
-### 2. 提交并推送到 GitHub
+### 2–3. 手动发布（备用；一般直接用上面的 ship.sh）
+
+若一键脚本不可用，再手动执行：
 
 ```bash
 git status
@@ -54,12 +93,12 @@ git push origin main
 
 推送时若要密码：Username 填 `iOSstudyPerson`，Password 填 GitHub **Personal Access Token**（不是登录密码）。
 
-### 3. 更新阿里云服务器
-
-SSH 登录服务器后执行：
+然后 SSH 到服务器：
 
 ```bash
-ssh root@139.224.224.26
+# 若提示 dubious ownership，先执行一次：
+git config --global --add safe.directory /opt/wangxia-club
+
 sudo bash /opt/wangxia-club/deploy/update.sh
 ```
 

@@ -12,13 +12,24 @@ function currentOverview(){
 
 function refreshOverview(){
   const overview = currentOverview();
+  if (overview && overview.alliances && typeof orgAlliances !== 'undefined') {
+    orgAlliances = overview.alliances;
+  }
+  if (overview && overview.clubs && typeof orgClubs !== 'undefined') {
+    orgClubs = overview.clubs;
+    if (typeof paintClubSwitcher === 'function') paintClubSwitcher();
+  }
+  if (typeof updateClubChrome === 'function') updateClubChrome();
+  if (typeof paintAlliancePanel === 'function') paintAlliancePanel();
+
   const n = overview.totalRegistered;
   document.getElementById('vTotalReg').textContent = n;
   document.getElementById('vTotalScore').textContent = overview.totalScore;
   document.getElementById('vAvgScore').textContent = overview.avgScore;
 
+  const clubLabel = (overview && overview.clubName) || (typeof activeClub === 'function' && activeClub() ? activeClub().name : '王下七武海');
   const tipCards = document.querySelectorAll('.stats-hero .card');
-  if (tipCards[0]) tipCards[0].dataset.tip = '王下七武海登记成员共 ' + n + ' 人';
+  if (tipCards[0]) tipCards[0].dataset.tip = clubLabel + '登记成员共 ' + n + ' 人';
   if (tipCards[1]) tipCards[1].dataset.tip = '全员非凡评分总和 ' + overview.totalScore;
   if (tipCards[2]) {
     tipCards[2].dataset.tip = overview.avgScoreNum
@@ -27,6 +38,8 @@ function refreshOverview(){
     const note = tipCards[2].querySelector('.c-note');
     if (note) note.textContent = overview.avgScoreNum ? ('按有评分成员计算') : '暂无评分数据';
   }
+  const note0 = tipCards[0] && tipCards[0].querySelector('.c-note');
+  if (note0) note0.textContent = clubLabel + '全员';
 
   renderSquads(overview);
   renderChart(overview);
@@ -159,10 +172,11 @@ const squadsPage = document.getElementById('page-squads');
 const leaguePage = document.getElementById('page-league');
 
 function showPage(name){
-  if (name === 'archive' && !loggedIn) {
-    pendingPageAfterLogin = 'archive';
+  const adminOnly = ['archive', 'squads', 'dkp', 'league', 'settings'];
+  if (!loggedIn && adminOnly.indexOf(name) >= 0) {
+    pendingPageAfterLogin = name;
     openLogin();
-    toast('查看成员档案需要管理员登录');
+    toast('该功能需要管理员登录');
     return;
   }
   const nav = document.querySelectorAll('.nav-item');
@@ -184,36 +198,44 @@ function showPage(name){
   if (leaguePage) leaguePage.classList.toggle('active', isLeague);
   placeholderPage.classList.toggle('active', !isOverview && !isArchive && !isDkp && !isSettings && !isForum && !isSquads && !isLeague);
   const titleP = document.querySelector('.tb-title p');
+  const clubName = (typeof activeClub === 'function' && activeClub()) ? activeClub().name : '王下七武海';
   if (isOverview) {
     if (crumbB) crumbB.textContent = '总览';
-    titleP.textContent = '王下七武海数据总览';
+    if (typeof updateClubChrome === 'function') updateClubChrome();
+    else if (titleP) titleP.textContent = clubName + '数据总览';
     refreshOverview();
     refreshChart();
+    if (typeof paintAlliancePanel === 'function') paintAlliancePanel();
   } else if (isArchive) {
-    titleP.textContent = '王下七武海 · 成员档案';
-    ensureMembersLoaded().then(() => renderMembers()).catch(err => toast(err.message || '加载成员失败'));
+    if (titleP) titleP.textContent = clubName + ' · 成员档案';
+    ensureMembersLoaded()
+      .then(async () => {
+        if (typeof loadMigrateQueue === 'function') await loadMigrateQueue();
+        renderMembers();
+      })
+      .catch(err => toast(err.message || '加载成员失败'));
   } else if (isSquads) {
-    titleP.textContent = '王下七武海 · 团队编组';
+    if (titleP) titleP.textContent = clubName + ' · 团队编组';
     if (typeof renderSquadsPage === 'function') renderSquadsPage();
   } else if (isLeague) {
-    titleP.textContent = '王下七武海 · 联赛分析';
+    if (titleP) titleP.textContent = '王下七武海 · 联赛分析';
     const go = () => { if (typeof renderLeaguePage === 'function') renderLeaguePage(); };
     if (loggedIn && typeof ensureMembersLoaded === 'function') {
       ensureMembersLoaded().then(go).catch(go);
     } else go();
   } else if (isDkp) {
-    titleP.textContent = '王下七武海 · DKP管理';
+    if (titleP) titleP.textContent = clubName + ' · DKP管理';
     if (typeof renderDkpPage === 'function') renderDkpPage();
   } else if (isForum) {
-    titleP.textContent = '王下七武海 · 论坛分享';
+    if (titleP) titleP.textContent = '王下七武海 · 论坛分享';
     forumView = forumView || 'list';
     refreshForum().catch(err => toast(err.message || '加载论坛失败'));
   } else if (isSettings) {
-    titleP.textContent = '王下七武海 · 系统设置';
+    if (titleP) titleP.textContent = '王下七武海 · 系统设置';
     if (typeof renderSettingsPage === 'function') renderSettingsPage();
   } else {
     const pg = PAGES[name];
-    titleP.textContent = '王下七武海 · ' + pg.title;
+    if (titleP) titleP.textContent = '王下七武海 · ' + pg.title;
     document.getElementById('phTitle').textContent = pg.title;
     document.getElementById('phDesc').textContent = pg.desc;
     document.getElementById('phIcon').innerHTML = ICONS[pg.icon] || '';
@@ -290,11 +312,16 @@ function setLoggedIn(user){
   adminUsername = user || '';
   document.getElementById('loginTxt').textContent = loggedIn ? ('管理员 · ' + adminUsername) : '管理员登录';
   if (typeof updateWriteUI === 'function') updateWriteUI();
+  if (typeof paintClubSwitcher === 'function') paintClubSwitcher();
   if (typeof renderMembers === 'function') renderMembers();
   if (typeof renderDkpPage === 'function') renderDkpPage();
   if (typeof renderSquadsPage === 'function' && squadsPage?.classList.contains('active')) renderSquadsPage();
   if (typeof renderLeaguePage === 'function' && leaguePage?.classList.contains('active')) renderLeaguePage();
   if (typeof renderSettingsPage === 'function' && settingsPage?.classList.contains('active')) renderSettingsPage();
+  if (!loggedIn) {
+    const cur = document.querySelector('.nav-item.active')?.dataset.page;
+    if (cur && cur !== 'overview' && cur !== 'forum') showPage('overview');
+  }
 }
 
 function openLogin(){
@@ -323,6 +350,7 @@ async function logoutAdmin(){
   await apiLogout();
   members = [];
   overviewCache = null;
+  if (typeof migrateQueue !== 'undefined') migrateQueue = [];
   setLoggedIn('');
   toast('已退出登录');
   try {
@@ -347,11 +375,17 @@ document.getElementById('loginSubmit').addEventListener('click', async () => {
     closeLogin();
     toast('登录成功');
     try {
-      members = await apiLoadMembers();
-      overviewCache = null;
-      refreshOverview();
+      if (typeof reloadClubScopedData === 'function') {
+        await reloadClubScopedData();
+      } else {
+        members = await apiLoadMembers();
+        attendanceEvents = await apiLoadEvents();
+        overviewCache = await apiLoadOverview();
+        refreshOverview();
+      }
+      if (typeof paintClubSwitcher === 'function') paintClubSwitcher();
     } catch (e) {
-      toast(e.message || '成员名单加载失败');
+      toast(e.message || '数据加载失败');
     }
     if (go) {
       showPage(go);
@@ -375,6 +409,7 @@ function renderSettingsPage(){
   const box = document.getElementById('settingsBody');
   if (!box) return;
   box.innerHTML =
+    (typeof renderOrgSettingsBlocks === 'function' ? renderOrgSettingsBlocks(canWrite) : '') +
     '<div class="settings-card">' +
       '<h3>数据备份</h3>' +
       '<p>导出成员与考勤为 JSON，便于备份或迁移到新服务器。</p>' +
@@ -387,9 +422,11 @@ function renderSettingsPage(){
     '</div>' +
     '<div class="settings-card">' +
       '<h3>账号说明</h3>' +
-      '<p>管理员账号在服务器环境变量或 <code>.env</code> 中配置。访客可看总览 / DKP / 论坛；成员档案仅管理员可查看。</p>' +
-      '<p class="settings-hint">当前状态：' + (canWrite ? ('已登录 · ' + esc(adminUsername)) : '访客（档案需登录）') + '</p>' +
+      '<p>管理员账号在服务器环境变量或 <code>.env</code> 中配置。访客仅可看<strong>总览</strong>与<strong>论坛</strong>；成员 / 编组 / DKP / 联赛 / 设置仅管理员可见。</p>' +
+      '<p class="settings-hint">当前状态：' + (canWrite ? ('已登录 · ' + esc(adminUsername)) : '访客') + '</p>' +
     '</div>';
+
+  if (typeof paintOrgSettingsLists === 'function') paintOrgSettingsLists(canWrite);
 
   document.getElementById('btnExport')?.addEventListener('click', exportBackup);
   const file = document.getElementById('btnImport');
@@ -486,6 +523,13 @@ async function bootstrap(){
     overviewCache = data.overview;
     members = data.members || [];
     attendanceEvents = data.events || [];
+    if (overviewCache && overviewCache.clubs) orgClubs = overviewCache.clubs;
+    if (overviewCache && overviewCache.alliances) orgAlliances = overviewCache.alliances;
+    if (typeof loadOrgClubs === 'function') await loadOrgClubs();
+    if (typeof loadOrgAlliances === 'function') await loadOrgAlliances();
+    else if (typeof paintAlliancePanel === 'function') paintAlliancePanel();
+    if (typeof paintClubSwitcher === 'function') paintClubSwitcher();
+    if (loggedIn && typeof loadMigrateQueue === 'function') await loadMigrateQueue();
     setSyncStatus(true, '服务器已连接 · 共享数据');
 
     // 若服务器为空，尝试迁移本机旧 localStorage 数据（仅提示一次）

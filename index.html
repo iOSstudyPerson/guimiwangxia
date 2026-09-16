@@ -6,9 +6,9 @@
 <title>王下七武海 · 俱乐部管理</title>
 <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Serif+SC:wght@400;600;700;900&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-<link rel="stylesheet" href="css/styles.css?v=20260915s">
+<link rel="stylesheet" href="css/styles.css?v=20260916d">
 </head>
-<body data-theme="mist" data-page="overview">
+<body data-theme="mist" data-page="overview" class="is-guest">
 <div class="app">
   <!-- ===== 侧边导航 ===== -->
   <aside class="sidebar" id="sidebar">
@@ -25,19 +25,19 @@
         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
         总览
       </div>
-      <div class="nav-item" data-page="archive">
+      <div class="nav-item" data-page="archive" data-admin-only="1">
         <svg viewBox="0 0 24 24"><path d="M4 4h16v4H4z"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
         成员档案
       </div>
-      <div class="nav-item" data-page="squads">
+      <div class="nav-item" data-page="squads" data-admin-only="1">
         <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.7-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.5" cy="9" r="2.6"/><path d="M15.5 14.2c2.6.3 4.4 1.9 5 4.8"/></svg>
         团队编组
       </div>
-      <div class="nav-item" data-page="dkp">
+      <div class="nav-item" data-page="dkp" data-admin-only="1">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v10M15 9.2c-.6-1-1.7-1.6-3-1.6-1.8 0-3 .9-3 2.3 0 3.2 6 1.3 6 4.5 0 1.4-1.3 2.4-3.2 2.4-1.4 0-2.6-.7-3.1-1.8"/></svg>
         DKP管理
       </div>
-      <div class="nav-item" data-page="league">
+      <div class="nav-item" data-page="league" data-admin-only="1">
         <svg viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg>
         联赛分析
       </div>
@@ -45,7 +45,7 @@
         <svg viewBox="0 0 24 24"><path d="M4 5h16v10H8l-4 4z"/></svg>
         论坛分享
       </div>
-      <div class="nav-item" data-page="settings">
+      <div class="nav-item" data-page="settings" data-admin-only="1">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/></svg>
         系统设置
       </div>
@@ -61,10 +61,14 @@
   <div class="main">
     <header class="topbar">
       <div class="tb-title">
-        <h2>王下七武海 · 俱乐部管理</h2>
-        <p>王下七武海数据总览</p>
+        <h2 id="tbClubTitle">王下七武海 · 俱乐部管理</h2>
+        <p id="tbClubSub">王下七武海数据总览</p>
       </div>
       <div class="tb-right">
+        <div class="club-switcher" id="clubSwitcher" hidden>
+          <label class="club-switcher-lab">当前俱乐部</label>
+          <select id="clubSelect" class="club-select" title="切换主俱乐部 / 附属俱乐部"></select>
+        </div>
         <div class="online" id="onlineBadge" title="工会共享数据"><span class="dot"></span>共享数据</div>
         <div class="btn" id="loginBtn"><svg class="lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span id="loginTxt">管理员登录</span></div>
         <div class="theme-sel" id="themeSel">
@@ -130,6 +134,14 @@
           <div id="pathChart"></div>
         </div>
       </div>
+
+      <section class="alliance-panel" id="alliancePanel" hidden>
+        <div class="alliance-head">
+          <span class="en">Allies</span>
+          <h3>同盟</h3>
+        </div>
+        <div class="alliance-list" id="allianceList"></div>
+      </section>
     </div>
 
     <!-- ===== 视图：成员档案（已接入，本地存储） ===== -->
@@ -164,11 +176,35 @@
         <div class="btn-add" id="mAddBtn">
           <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新增成员
         </div>
+        <label class="btn-add btn-ghost" id="mOcrBtn" title="上传成员名单截图识别录入">
+          OCR 录入
+          <input type="file" id="mOcrFile" accept="image/*" hidden>
+        </label>
       </div>
 
-      <div class="arch-count">共 <b id="mCount">0</b> 条记录</div>
+      <div class="arch-count">共 <b id="mCount">0</b> 条记录<span class="migrate-hint" id="migrateHint" hidden> · 点「待迁」加入迁入托盘</span></div>
 
       <div class="arch-table-wrap" id="mWrap"></div>
+
+      <aside class="migrate-dock" id="migratePanel" hidden>
+        <div class="migrate-dock-inner">
+          <div class="migrate-dock-meta">
+            <div class="migrate-dock-title">
+              <span class="migrate-dock-mark" aria-hidden="true"></span>
+              迁入托盘
+              <b id="migrateCount">0</b>
+            </div>
+            <div class="migrate-dock-sub" id="migrateSub">选定目标后确认迁入</div>
+          </div>
+          <div class="migrate-dock-rail" id="migrateList"></div>
+          <div class="migrate-dock-ops">
+            <label class="migrate-target-lab" for="migrateTarget">迁入</label>
+            <select id="migrateTarget" class="sel migrate-target"></select>
+            <button type="button" class="btn-add" id="migrateConfirmBtn">确认迁入</button>
+            <button type="button" class="btn-add btn-ghost" id="migrateClearBtn">清空</button>
+          </div>
+        </div>
+      </aside>
     </div>
 
     <!-- ===== 视图：团队编组 ===== -->
@@ -272,6 +308,7 @@
         <select id="mPathway"></select>
       </div>
       <div class="field"><label>非凡评分</label><input id="mScore" type="number" min="0" step="1" placeholder="0"></div>
+      <div class="field"><label>入会时间</label><input id="mJoinedAt" type="date"></div>
       <div class="field full"><label>状态</label>
         <select id="mStatus"><option value="在帮">在帮</option><option value="待入帮">待入帮</option></select>
       </div>
@@ -365,13 +402,14 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="js/data.js?v=20260915s"></script>
-<script src="js/api.js?v=20260915s"></script>
-<script src="js/members.js?v=20260915s"></script>
-<script src="js/attendance.js?v=20260915s"></script>
-<script src="js/squads.js?v=20260915s"></script>
-<script src="js/league.js?v=20260915s"></script>
-<script src="js/forum.js?v=20260915s"></script>
-<script src="js/app.js?v=20260915s"></script>
+<script src="js/data.js?v=20260916d"></script>
+<script src="js/api.js?v=20260916d"></script>
+<script src="js/org.js?v=20260916d"></script>
+<script src="js/members.js?v=20260916d"></script>
+<script src="js/attendance.js?v=20260916d"></script>
+<script src="js/squads.js?v=20260916d"></script>
+<script src="js/league.js?v=20260916d"></script>
+<script src="js/forum.js?v=20260916d"></script>
+<script src="js/app.js?v=20260916d"></script>
 </body>
 </html>

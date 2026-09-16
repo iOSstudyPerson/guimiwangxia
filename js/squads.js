@@ -14,7 +14,7 @@ let squadActiveId = '一团';
 let squadDragPayload = null;
 
 async function loadSquadBoard(){
-  squadBoard = await api('/api/squads');
+  squadBoard = await api('/api/squads' + (typeof clubQuery === 'function' ? clubQuery() : ''));
   if (typeof members !== 'undefined' && loggedIn) {
     // 管理员侧同步本地 members 的编组字段
     const map = {};
@@ -334,7 +334,7 @@ async function removeFromSlot(memberId, regimentId, mode){
   try {
     const res = await api('/api/squads/assign', {
       method: 'PUT',
-      body: JSON.stringify({ moves })
+      body: JSON.stringify(typeof withClubId === 'function' ? withClubId({ moves }) : { moves })
     });
     applySquadBoardResult(res);
     closeSquadPicker();
@@ -361,7 +361,7 @@ async function assignMemberToSlot(memberId, reg, team, slot, currentId){
   try {
     const res = await api('/api/squads/assign', {
       method: 'PUT',
-      body: JSON.stringify({ moves })
+      body: JSON.stringify(typeof withClubId === 'function' ? withClubId({ moves }) : { moves })
     });
     applySquadBoardResult(res);
     closeSquadPicker();
@@ -622,7 +622,7 @@ async function handleSquadDrop(zone, drag){
   try {
     const res = await api('/api/squads/assign', {
       method: 'PUT',
-      body: JSON.stringify({ moves })
+      body: JSON.stringify(typeof withClubId === 'function' ? withClubId({ moves }) : { moves })
     });
     applySquadBoardResult(res);
     paintSquadsPage(document.getElementById('squadsRoot'), true);
@@ -735,7 +735,11 @@ async function saveSquadMeta(){
   try {
     const res = await api('/api/squads/meta', {
       method: 'PUT',
-      body: JSON.stringify({
+      body: JSON.stringify(typeof withClubId === 'function' ? withClubId({
+        id: squadActiveId,
+        title,
+        leaderId: leaderId || null
+      }) : {
         id: squadActiveId,
         title,
         leaderId: leaderId || null
@@ -756,7 +760,11 @@ async function setSquadLeader(regimentId, memberId){
   try {
     const res = await api('/api/squads/meta', {
       method: 'PUT',
-      body: JSON.stringify({
+      body: JSON.stringify(typeof withClubId === 'function' ? withClubId({
+        id: regimentId || squadActiveId,
+        title: meta.title || regimentId || squadActiveId,
+        leaderId: memberId
+      }) : {
         id: regimentId || squadActiveId,
         title: meta.title || regimentId || squadActiveId,
         leaderId: memberId

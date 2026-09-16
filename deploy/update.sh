@@ -6,6 +6,9 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$APP_DIR"
 
+# root 更新 www-data 所属仓库时，避免 dubious ownership
+git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
+
 echo "==> 拉取最新代码"
 git fetch --all --prune
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"

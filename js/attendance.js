@@ -213,7 +213,7 @@ async function saveEventForm(){
     } else {
       const res = await api('/api/events', {
         method: 'POST',
-        body: JSON.stringify({ date, name, note })
+        body: JSON.stringify(typeof withClubId === 'function' ? withClubId({ date, name, note }) : { date, name, note })
       });
       attendanceEvents.push(res.event);
       toast('已创建活动「' + name + '」');

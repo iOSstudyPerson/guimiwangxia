@@ -53,16 +53,16 @@ async function apiMe(){
 }
 
 async function apiLoadOverview(){
-  return api('/api/overview');
+  return api('/api/overview' + (typeof clubQuery === 'function' ? clubQuery() : ''));
 }
 
 async function apiLoadEvents(){
-  const e = await api('/api/events');
+  const e = await api('/api/events' + (typeof clubQuery === 'function' ? clubQuery() : ''));
   return (e && e.events) || [];
 }
 
 async function apiLoadMembers(){
-  const m = await api('/api/members');
+  const m = await api('/api/members' + (typeof clubQuery === 'function' ? clubQuery() : ''));
   return (m && m.members) || [];
 }
 

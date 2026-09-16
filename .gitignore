@@ -12,3 +12,4 @@ export/out/
 .venv/
 venv/
 agent-transcripts/
+deploy/ship.local.env

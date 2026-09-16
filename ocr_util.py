@@ -469,3 +469,116 @@ def recognize_and_parse(image_b64: str) -> dict[str, Any]:
         "rawLines": raw_lines[:80],
         "detectionCount": len(detections),
     }
+
+
+ROSTER_PATHWAYS = ("歌颂者", "奶妈", "占卜家", "学徒", "战士", "窥秘人")
+ROSTER_SKIP = re.compile(
+    r"^(合计|总计|平均|排名|名次|俱乐部|公会|联盟|同盟|成员|名单|姓名|昵称|角色|"
+    r"途径|职业|评分|非凡|状态|在帮|待入帮|战团|一团|二团|三团|未编组|"
+    r"王下七武海|BEYONDERS?)$",
+    re.I,
+)
+
+
+def _roster_pathway_in(text: str) -> str:
+    for p in ROSTER_PATHWAYS:
+        if p in text:
+            return p
+    return ""
+
+
+def _roster_score_in(text: str) -> int:
+    nums = re.findall(r"\d{3,6}", text.replace(",", ""))
+    # 偏好四位评分
+    for n in nums:
+        v = int(n)
+        if 1000 <= v <= 99999:
+            return v
+    return int(nums[0]) if nums else 0
+
+
+def _parse_roster_line(line: str) -> Optional[dict]:
+    raw = re.sub(r"\s+", " ", str(line or "").strip())
+    if not raw or len(raw) < 2:
+        return None
+    if ROSTER_SKIP.match(raw):
+        return None
+    # 表头行：同时出现多个字段名
+    header_hits = sum(1 for w in ("姓名", "昵称", "途径", "职业", "评分", "非凡", "状态", "战团") if w in raw)
+    if header_hits >= 2:
+        return None
+    pathway = _roster_pathway_in(raw)
+    score = _roster_score_in(raw)
+    # 去掉途径与纯数字后取姓名
+    name = raw
+    if pathway:
+        name = name.replace(pathway, " ")
+    name = re.sub(r"[\d,.\-/|]+", " ", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    # 常见前缀：序号
+    name = re.sub(r"^\d{1,3}[\.、\)]\s*", "", name)
+    name = name.strip(" ·•|-_")[:40]
+    if not name or len(name) < 2:
+        return None
+    if ROSTER_SKIP.match(name) or SKIP_NAME_RE.match(name):
+        return None
+    if re.fullmatch(r"[\d\W_]+", name):
+        return None
+    # 过长且含多段，取第一段中文/字母块
+    if len(name) > 16:
+        m = re.match(r"^([\u4e00-\u9fffA-Za-z0-9_·]{2,16})", name)
+        if m:
+            name = m.group(1)
+    return {
+        "name": name,
+        "pathway": pathway or "歌颂者",
+        "score": score,
+    }
+
+
+def parse_roster_text(text: str) -> tuple[list[dict], list[str]]:
+    candidates: list[dict] = []
+    raw_lines: list[str] = []
+    seen: set[str] = set()
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        raw_lines.append(line)
+        item = _parse_roster_line(line)
+        if not item:
+            continue
+        key = item["name"]
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(item)
+    return candidates, raw_lines
+
+
+def parse_roster_detections(detections: list) -> tuple[list[dict], list[str]]:
+    rows = _cluster_rows(detections or [])
+    lines: list[str] = []
+    for row in rows:
+        texts = [str(t.get("text") or "").strip() for t in row if t.get("text")]
+        texts = [t for t in texts if t]
+        if texts:
+            lines.append(" ".join(texts))
+    if not lines:
+        for d in detections or []:
+            t = str((d or {}).get("DetectedText") or "").strip()
+            if t:
+                lines.append(t)
+    return parse_roster_text("\n".join(lines))
+
+
+def recognize_and_parse_roster(image_b64: str) -> dict[str, Any]:
+    resp = recognize_image_base64(image_b64)
+    detections = resp.get("TextDetections") or []
+    candidates, raw_lines = parse_roster_detections(detections)
+    return {
+        "engine": resp.get("_engine") or "GeneralAccurateOCR",
+        "candidates": candidates,
+        "rawLines": raw_lines[:80],
+        "detectionCount": len(detections),
+    }

@@ -14,7 +14,7 @@ import time
 import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import cos_util
 import ocr_util
@@ -58,6 +58,20 @@ def uid() -> str:
 
 def now_ts() -> int:
     return int(time.time())
+
+
+def _normalize_joined_at(val) -> str:
+    """入会日期 YYYY-MM-DD；非法则空串。"""
+    s = str(val or "").strip()
+    if not s:
+        return ""
+    m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
+    if not m:
+        return ""
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if not (1 <= mo <= 12 and 1 <= d <= 31):
+        return ""
+    return f"{y:04d}-{mo:02d}-{d:02d}"
 
 
 def hash_pw(password: str) -> str:
@@ -116,15 +130,184 @@ def init_db() -> None:
     conn.commit()
     ensure_forum_schema(conn)
     ensure_squad_schema(conn)
+    ensure_org_schema(conn)
+    ensure_member_join_schema(conn)
+    ensure_migrate_schema(conn)
     ensure_league_schema(conn)
     conn.commit()
     conn.close()
+
+
+def ensure_member_join_schema(conn: sqlite3.Connection) -> None:
+    """成员入会时间。"""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(members)").fetchall()}
+    if "joined_at" not in cols:
+        conn.execute("ALTER TABLE members ADD COLUMN joined_at TEXT")
+
+
+def ensure_migrate_schema(conn: sqlite3.Connection) -> None:
+    """成员待迁队列（跨主/附属俱乐部）。"""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS migrate_queue (
+          member_id TEXT PRIMARY KEY,
+          from_club_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+        """
+    )
 
 
 REGIMENT_IDS = ("一团", "二团", "三团")
 SQUAD_TEAM_COUNT = 5
 SQUAD_SLOT_COUNT = 6
 SQUAD_REGIMENT_CAP = SQUAD_TEAM_COUNT * SQUAD_SLOT_COUNT  # 30
+MAIN_CLUB_ID = "main"
+MAIN_CLUB_NAME = "王下七武海"
+
+
+def ensure_org_schema(conn: sqlite3.Connection) -> None:
+    """主俱乐部 + 附属俱乐部 + 同盟；成员/活动/编组按 club_id 隔离。"""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS clubs (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'sub',
+          note TEXT NOT NULL DEFAULT '',
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS alliances (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          note TEXT NOT NULL DEFAULT '',
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    main = conn.execute(
+        "SELECT id FROM clubs WHERE kind = 'main' LIMIT 1"
+    ).fetchone()
+    if not main:
+        conn.execute(
+            """
+            INSERT INTO clubs(id, name, kind, note, sort_order, created_at)
+            VALUES (?, ?, 'main', '', 0, ?)
+            """,
+            (MAIN_CLUB_ID, MAIN_CLUB_NAME, now_ts()),
+        )
+    main_id = MAIN_CLUB_ID
+    mrow = conn.execute(
+        "SELECT id FROM clubs WHERE kind = 'main' LIMIT 1"
+    ).fetchone()
+    if mrow:
+        main_id = mrow["id"]
+
+    mem_cols = {r[1] for r in conn.execute("PRAGMA table_info(members)").fetchall()}
+    if mem_cols and "club_id" not in mem_cols:
+        conn.execute("ALTER TABLE members ADD COLUMN club_id TEXT")
+    conn.execute(
+        "UPDATE members SET club_id = ? WHERE club_id IS NULL OR TRIM(club_id) = ''",
+        (main_id,),
+    )
+
+    ev_cols = {r[1] for r in conn.execute("PRAGMA table_info(events)").fetchall()}
+    if ev_cols and "club_id" not in ev_cols:
+        conn.execute("ALTER TABLE events ADD COLUMN club_id TEXT")
+    conn.execute(
+        "UPDATE events SET club_id = ? WHERE club_id IS NULL OR TRIM(club_id) = ''",
+        (main_id,),
+    )
+
+    sm_cols = {r[1] for r in conn.execute("PRAGMA table_info(squad_meta)").fetchall()}
+    if sm_cols and "club_id" not in sm_cols:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS squad_meta_new (
+              club_id TEXT NOT NULL,
+              id TEXT NOT NULL,
+              title TEXT NOT NULL,
+              leader_id TEXT,
+              PRIMARY KEY (club_id, id)
+            );
+            INSERT OR IGNORE INTO squad_meta_new(club_id, id, title, leader_id)
+            SELECT '%s', id, title, leader_id FROM squad_meta;
+            DROP TABLE squad_meta;
+            ALTER TABLE squad_meta_new RENAME TO squad_meta;
+            """
+            % main_id.replace("'", "''")
+        )
+    for crow in conn.execute("SELECT id FROM clubs"):
+        cid = crow["id"]
+        for rid in REGIMENT_IDS:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO squad_meta(club_id, id, title, leader_id)
+                VALUES (?, ?, ?, NULL)
+                """,
+                (cid, rid, rid),
+            )
+
+
+def get_main_club_id(conn: sqlite3.Connection) -> str:
+    ensure_org_schema(conn)
+    row = conn.execute(
+        "SELECT id FROM clubs WHERE kind = 'main' LIMIT 1"
+    ).fetchone()
+    return row["id"] if row else MAIN_CLUB_ID
+
+
+def resolve_club_id(conn: sqlite3.Connection, requested: str | None) -> str:
+    ensure_org_schema(conn)
+    req = (requested or "").strip()
+    if req:
+        hit = conn.execute("SELECT id FROM clubs WHERE id = ?", (req,)).fetchone()
+        if hit:
+            return hit["id"]
+    return get_main_club_id(conn)
+
+
+def club_row(r: sqlite3.Row) -> dict:
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "kind": r["kind"] or "sub",
+        "note": r["note"] or "",
+        "sortOrder": int(r["sort_order"] or 0),
+        "createdAt": int(r["created_at"] or 0),
+    }
+
+
+def list_clubs(conn: sqlite3.Connection) -> list:
+    ensure_org_schema(conn)
+    return [
+        club_row(r)
+        for r in conn.execute(
+            "SELECT * FROM clubs ORDER BY CASE kind WHEN 'main' THEN 0 ELSE 1 END, sort_order, name, id"
+        )
+    ]
+
+
+def alliance_row(r: sqlite3.Row) -> dict:
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "note": r["note"] or "",
+        "sortOrder": int(r["sort_order"] or 0),
+        "createdAt": int(r["created_at"] or 0),
+    }
+
+
+def list_alliances(conn: sqlite3.Connection) -> list:
+    ensure_org_schema(conn)
+    return [
+        alliance_row(r)
+        for r in conn.execute(
+            "SELECT * FROM alliances ORDER BY sort_order, name, id"
+        )
+    ]
 
 
 def ensure_squad_schema(conn: sqlite3.Connection) -> None:
@@ -158,28 +341,37 @@ def _team_slot(val):
         return None
 
 
-def load_leader_ids(conn: sqlite3.Connection) -> set:
-    return {
-        row["leader_id"]
-        for row in conn.execute(
+def load_leader_ids(conn: sqlite3.Connection, club_id: str | None = None) -> set:
+    if club_id:
+        rows = conn.execute(
+            "SELECT leader_id FROM squad_meta WHERE club_id = ? AND leader_id IS NOT NULL AND leader_id != ''",
+            (club_id,),
+        )
+    else:
+        rows = conn.execute(
             "SELECT leader_id FROM squad_meta WHERE leader_id IS NOT NULL AND leader_id != ''"
         )
-        if row["leader_id"]
-    }
+    return {row["leader_id"] for row in rows if row["leader_id"]}
 
 
-def list_squad_meta(conn: sqlite3.Connection) -> list:
+def list_squad_meta(conn: sqlite3.Connection, club_id: str | None = None) -> list:
+    ensure_org_schema(conn)
+    cid = resolve_club_id(conn, club_id)
     out = []
     for rid in REGIMENT_IDS:
-        row = conn.execute("SELECT * FROM squad_meta WHERE id = ?", (rid,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM squad_meta WHERE club_id = ? AND id = ?",
+            (cid, rid),
+        ).fetchone()
         if not row:
-            out.append({"id": rid, "title": rid, "leaderId": None})
+            out.append({"id": rid, "title": rid, "leaderId": None, "clubId": cid})
             continue
         out.append(
             {
                 "id": rid,
                 "title": row["title"] or rid,
                 "leaderId": row["leader_id"] or None,
+                "clubId": cid,
             }
         )
     return out
@@ -951,6 +1143,12 @@ def member_row(r: sqlite3.Row, leader_ids: set | None = None) -> dict:
     team = _team_slot(r["team"] if "team" in keys else None)
     slot = _team_slot(r["slot"] if "slot" in keys else None)
     mid = r["id"]
+    club_id = ""
+    if "club_id" in keys:
+        club_id = (r["club_id"] or "") or ""
+    joined_at = ""
+    if "joined_at" in keys:
+        joined_at = (r["joined_at"] or "") or ""
     return {
         "id": mid,
         "name": r["name"],
@@ -960,6 +1158,8 @@ def member_row(r: sqlite3.Row, leader_ids: set | None = None) -> dict:
         "status": r["status"],
         "team": team,
         "slot": slot,
+        "clubId": club_id,
+        "joinedAt": joined_at,
         "isLeader": bool(leader_ids and mid in leader_ids),
     }
 
@@ -970,26 +1170,35 @@ def event_dict(conn: sqlite3.Connection, r: sqlite3.Row) -> dict:
         "SELECT member_id, status FROM event_records WHERE event_id = ?", (r["id"],)
     ):
         records[row["member_id"]] = row["status"]
+    keys = r.keys()
+    club_id = (r["club_id"] if "club_id" in keys else "") or ""
     return {
         "id": r["id"],
         "date": r["date"],
         "name": r["name"],
         "note": r["note"] or "",
+        "clubId": club_id,
         "records": records,
     }
 
 
-def list_members(conn: sqlite3.Connection) -> list:
-    leaders = load_leader_ids(conn)
+def list_members(conn: sqlite3.Connection, club_id: str | None = None) -> list:
+    ensure_org_schema(conn)
+    cid = resolve_club_id(conn, club_id)
+    leaders = load_leader_ids(conn, cid)
     rows = conn.execute(
-        "SELECT * FROM members ORDER BY pathway, name, id"
+        "SELECT * FROM members WHERE club_id = ? ORDER BY pathway, name, id",
+        (cid,),
     ).fetchall()
     return [member_row(r, leaders) for r in rows]
 
 
-def list_events(conn: sqlite3.Connection) -> list:
+def list_events(conn: sqlite3.Connection, club_id: str | None = None) -> list:
+    ensure_org_schema(conn)
+    cid = resolve_club_id(conn, club_id)
     rows = conn.execute(
-        "SELECT * FROM events ORDER BY date DESC, id DESC"
+        "SELECT * FROM events WHERE club_id = ? ORDER BY date DESC, id DESC",
+        (cid,),
     ).fetchall()
     return [event_dict(conn, r) for r in rows]
 
@@ -1019,6 +1228,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args) -> None:
         print("[%s] %s" % (self.log_date_time_string(), fmt % args))
+
+    def _club_param(self) -> str | None:
+        q = parse_qs(urlparse(self.path).query)
+        vals = q.get("clubId") or q.get("club_id") or []
+        return (vals[0] if vals else None) or None
 
     def _cors(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -1112,6 +1326,22 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.api_me()
             if method == "GET" and path == "/api/overview":
                 return self.api_overview()
+            if method == "GET" and path == "/api/clubs":
+                return self.api_clubs_list()
+            if method == "POST" and path == "/api/clubs":
+                return self.api_clubs_create()
+            if method == "PUT" and len(parts) == 3 and parts[1] == "clubs":
+                return self.api_clubs_update(parts[2])
+            if method == "DELETE" and len(parts) == 3 and parts[1] == "clubs":
+                return self.api_clubs_delete(parts[2])
+            if method == "GET" and path == "/api/alliances":
+                return self.api_alliances_list()
+            if method == "POST" and path == "/api/alliances":
+                return self.api_alliances_create()
+            if method == "PUT" and len(parts) == 3 and parts[1] == "alliances":
+                return self.api_alliances_update(parts[2])
+            if method == "DELETE" and len(parts) == 3 and parts[1] == "alliances":
+                return self.api_alliances_delete(parts[2])
             if method == "GET" and path == "/api/squads":
                 return self.api_squads_board()
             if method == "PUT" and path == "/api/squads/meta":
@@ -1136,6 +1366,18 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.api_league_delete(parts[3])
             if method == "GET" and path == "/api/members":
                 return self.api_list_members()
+            if method == "GET" and path == "/api/members/migrate-queue":
+                return self.api_migrate_queue_list()
+            if method == "POST" and path == "/api/members/migrate-queue":
+                return self.api_migrate_queue_add()
+            if method == "DELETE" and path == "/api/members/migrate-queue":
+                return self.api_migrate_queue_remove()
+            if method == "POST" and path == "/api/members/migrate":
+                return self.api_members_migrate()
+            if method == "POST" and path == "/api/members/ocr":
+                return self.api_members_ocr()
+            if method == "POST" and path == "/api/members/batch":
+                return self.api_members_batch()
             if method == "POST" and path == "/api/members":
                 return self.api_create_member()
             if method == "PUT" and len(parts) == 3 and parts[1] == "members":
@@ -1207,12 +1449,184 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self._json(200, {"username": user})
 
+    def api_clubs_list(self) -> None:
+        conn = get_db()
+        try:
+            self._json(200, {"clubs": list_clubs(conn)})
+        finally:
+            conn.close()
+
+    def api_clubs_create(self) -> None:
+        if not self._require_admin():
+            return
+        data = self._read_json()
+        name = (data.get("name") or "").strip()[:40]
+        if not name:
+            self._json(400, {"error": "俱乐部名称必填"})
+            return
+        cid = str(data.get("id") or uid())
+        note = (data.get("note") or "").strip()[:200]
+        conn = get_db()
+        try:
+            ensure_org_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO clubs(id, name, kind, note, sort_order, created_at)
+                VALUES (?, ?, 'sub', ?, ?, ?)
+                """,
+                (cid, name, note, int(data.get("sortOrder") or 10), now_ts()),
+            )
+            for rid in REGIMENT_IDS:
+                conn.execute(
+                    "INSERT OR IGNORE INTO squad_meta(club_id, id, title, leader_id) VALUES (?, ?, ?, NULL)",
+                    (cid, rid, rid),
+                )
+            conn.commit()
+            self._json(200, {"club": club_row(conn.execute("SELECT * FROM clubs WHERE id=?", (cid,)).fetchone()), "clubs": list_clubs(conn)})
+        finally:
+            conn.close()
+
+    def api_clubs_update(self, cid: str) -> None:
+        if not self._require_admin():
+            return
+        cid = unquote(cid)
+        data = self._read_json()
+        conn = get_db()
+        try:
+            row = conn.execute("SELECT * FROM clubs WHERE id = ?", (cid,)).fetchone()
+            if not row:
+                self._json(404, {"error": "俱乐部不存在"})
+                return
+            name = (data.get("name") if "name" in data else row["name"]) or ""
+            name = str(name).strip()[:40]
+            if not name:
+                self._json(400, {"error": "俱乐部名称必填"})
+                return
+            note = data.get("note") if "note" in data else row["note"]
+            sort_order = data.get("sortOrder") if "sortOrder" in data else row["sort_order"]
+            conn.execute(
+                "UPDATE clubs SET name=?, note=?, sort_order=? WHERE id=?",
+                (name, str(note or "").strip()[:200], int(sort_order or 0), cid),
+            )
+            conn.commit()
+            self._json(200, {"club": club_row(conn.execute("SELECT * FROM clubs WHERE id=?", (cid,)).fetchone()), "clubs": list_clubs(conn)})
+        finally:
+            conn.close()
+
+    def api_clubs_delete(self, cid: str) -> None:
+        if not self._require_admin():
+            return
+        cid = unquote(cid)
+        conn = get_db()
+        try:
+            row = conn.execute("SELECT * FROM clubs WHERE id = ?", (cid,)).fetchone()
+            if not row:
+                self._json(404, {"error": "俱乐部不存在"})
+                return
+            if row["kind"] == "main":
+                self._json(400, {"error": "主俱乐部不能删除"})
+                return
+            n_mem = conn.execute(
+                "SELECT COUNT(*) AS c FROM members WHERE club_id = ?", (cid,)
+            ).fetchone()["c"]
+            n_ev = conn.execute(
+                "SELECT COUNT(*) AS c FROM events WHERE club_id = ?", (cid,)
+            ).fetchone()["c"]
+            if int(n_mem or 0) or int(n_ev or 0):
+                self._json(400, {"error": "请先清空该附属俱乐部的成员与活动后再删除"})
+                return
+            conn.execute("DELETE FROM squad_meta WHERE club_id = ?", (cid,))
+            conn.execute("DELETE FROM clubs WHERE id = ?", (cid,))
+            conn.commit()
+            self._json(200, {"ok": True, "clubs": list_clubs(conn)})
+        finally:
+            conn.close()
+
+    def api_alliances_list(self) -> None:
+        conn = get_db()
+        try:
+            self._json(200, {"alliances": list_alliances(conn)})
+        finally:
+            conn.close()
+
+    def api_alliances_create(self) -> None:
+        if not self._require_admin():
+            return
+        data = self._read_json()
+        name = (data.get("name") or "").strip()[:40]
+        if not name:
+            self._json(400, {"error": "同盟名称必填"})
+            return
+        aid = str(data.get("id") or uid())
+        note = (data.get("note") or "").strip()[:300]
+        conn = get_db()
+        try:
+            ensure_org_schema(conn)
+            conn.execute(
+                "INSERT INTO alliances(id, name, note, sort_order, created_at) VALUES (?, ?, ?, ?, ?)",
+                (aid, name, note, int(data.get("sortOrder") or 0), now_ts()),
+            )
+            conn.commit()
+            self._json(200, {"alliance": alliance_row(conn.execute("SELECT * FROM alliances WHERE id=?", (aid,)).fetchone()), "alliances": list_alliances(conn)})
+        finally:
+            conn.close()
+
+    def api_alliances_update(self, aid: str) -> None:
+        if not self._require_admin():
+            return
+        aid = unquote(aid)
+        data = self._read_json()
+        conn = get_db()
+        try:
+            row = conn.execute("SELECT * FROM alliances WHERE id = ?", (aid,)).fetchone()
+            if not row:
+                self._json(404, {"error": "同盟不存在"})
+                return
+            name = (data.get("name") if "name" in data else row["name"]) or ""
+            name = str(name).strip()[:40]
+            if not name:
+                self._json(400, {"error": "同盟名称必填"})
+                return
+            note = data.get("note") if "note" in data else row["note"]
+            sort_order = data.get("sortOrder") if "sortOrder" in data else row["sort_order"]
+            conn.execute(
+                "UPDATE alliances SET name=?, note=?, sort_order=? WHERE id=?",
+                (name, str(note or "").strip()[:300], int(sort_order or 0), aid),
+            )
+            conn.commit()
+            self._json(200, {"alliance": alliance_row(conn.execute("SELECT * FROM alliances WHERE id=?", (aid,)).fetchone()), "alliances": list_alliances(conn)})
+        finally:
+            conn.close()
+
+    def api_alliances_delete(self, aid: str) -> None:
+        if not self._require_admin():
+            return
+        aid = unquote(aid)
+        conn = get_db()
+        try:
+            cur = conn.execute("DELETE FROM alliances WHERE id = ?", (aid,))
+            conn.commit()
+            if cur.rowcount == 0:
+                self._json(404, {"error": "同盟不存在"})
+                return
+            self._json(200, {"ok": True, "alliances": list_alliances(conn)})
+        finally:
+            conn.close()
+
     def api_overview(self) -> None:
         """访客可看的总览聚合（不含完整成员名单）。"""
         conn = get_db()
         try:
-            mems = list_members(conn)
+            ensure_org_schema(conn)
+            cid = resolve_club_id(conn, self._club_param())
+            mems = list_members(conn, cid)
+            club = conn.execute("SELECT * FROM clubs WHERE id = ?", (cid,)).fetchone()
+            club_name = club["name"] if club else MAIN_CLUB_NAME
             overview = {
+                "clubId": cid,
+                "clubName": club_name,
+                "alliances": list_alliances(conn),
+                "clubs": list_clubs(conn),
                 "totalRegistered": len(mems),
                 "totalScoreNum": sum(int(m.get("score") or 0) for m in mems),
                 "pathways": {},
@@ -1257,13 +1671,17 @@ class Handler(SimpleHTTPRequestHandler):
                     "name": e["name"],
                     "note": e.get("note") or "",
                 }
-                for e in list_events(conn)
+                for e in list_events(conn, cid)
                 if (e.get("date") or "") >= today
             ]
             active.sort(key=lambda x: (x["date"], x["name"]))
             self._json(
                 200,
                 {
+                    "clubId": cid,
+                    "clubName": club_name,
+                    "clubs": list_clubs(conn),
+                    "alliances": list_alliances(conn),
                     "totalRegistered": overview["totalRegistered"],
                     "totalScore": f'{overview["totalScoreNum"]:,}',
                     "totalScoreNum": overview["totalScoreNum"],
@@ -1274,7 +1692,7 @@ class Handler(SimpleHTTPRequestHandler):
                     ),
                     "avgScoreNum": overview["avgScoreNum"],
                     "pathways": pathways,
-                    "readiness": [{"group": "王下七武海", "squads": squads}],
+                    "readiness": [{"group": club_name, "squads": squads}],
                     "activeEvents": active[:8],
                 },
             )
@@ -1285,8 +1703,9 @@ class Handler(SimpleHTTPRequestHandler):
         """访客可看战团编组（不含档案写权限）。"""
         conn = get_db()
         try:
-            metas = list_squad_meta(conn)
-            mems = list_members(conn)
+            cid = resolve_club_id(conn, self._club_param())
+            metas = list_squad_meta(conn, cid)
+            mems = list_members(conn, cid)
             active = [m for m in mems if m.get("status") == "在帮"]
             seated = sum(
                 1
@@ -1296,6 +1715,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._json(
                 200,
                 {
+                    "clubId": cid,
                     "teamCount": SQUAD_TEAM_COUNT,
                     "slotCount": SQUAD_SLOT_COUNT,
                     "regimentCap": SQUAD_REGIMENT_CAP,
@@ -1312,6 +1732,7 @@ class Handler(SimpleHTTPRequestHandler):
                             "team": m.get("team"),
                             "slot": m.get("slot"),
                             "isLeader": m.get("isLeader"),
+                            "clubId": m.get("clubId"),
                         }
                         for m in active
                     ],
@@ -1332,13 +1753,20 @@ class Handler(SimpleHTTPRequestHandler):
         leader_id = data.get("leaderId") if "leaderId" in data else None
         conn = get_db()
         try:
-            row = conn.execute("SELECT * FROM squad_meta WHERE id = ?", (rid,)).fetchone()
+            cid = resolve_club_id(conn, data.get("clubId") or self._club_param())
+            row = conn.execute(
+                "SELECT * FROM squad_meta WHERE club_id = ? AND id = ?",
+                (cid, rid),
+            ).fetchone()
             if not row:
                 conn.execute(
-                    "INSERT INTO squad_meta(id, title, leader_id) VALUES (?, ?, NULL)",
-                    (rid, rid),
+                    "INSERT INTO squad_meta(club_id, id, title, leader_id) VALUES (?, ?, ?, NULL)",
+                    (cid, rid, rid),
                 )
-                row = conn.execute("SELECT * FROM squad_meta WHERE id = ?", (rid,)).fetchone()
+                row = conn.execute(
+                    "SELECT * FROM squad_meta WHERE club_id = ? AND id = ?",
+                    (cid, rid),
+                ).fetchone()
             new_title = row["title"] or rid
             new_leader = row["leader_id"]
             if title is not None:
@@ -1347,7 +1775,8 @@ class Handler(SimpleHTTPRequestHandler):
                 if leader_id:
                     leader_id = str(leader_id).strip()
                     mem = conn.execute(
-                        "SELECT id, squad FROM members WHERE id = ?", (leader_id,)
+                        "SELECT id, squad, club_id FROM members WHERE id = ?",
+                        (leader_id,),
                     ).fetchone()
                     if not mem:
                         self._json(400, {"error": "团长成员不存在"})
@@ -1355,15 +1784,24 @@ class Handler(SimpleHTTPRequestHandler):
                     if mem["squad"] != rid:
                         self._json(400, {"error": "团长须属于该战团"})
                         return
+                    if (mem["club_id"] or "") != cid:
+                        self._json(400, {"error": "团长须属于当前俱乐部"})
+                        return
                     new_leader = leader_id
                 else:
                     new_leader = None
             conn.execute(
-                "UPDATE squad_meta SET title=?, leader_id=? WHERE id=?",
-                (new_title, new_leader, rid),
+                "UPDATE squad_meta SET title=?, leader_id=? WHERE club_id=? AND id=?",
+                (new_title, new_leader, cid, rid),
             )
             conn.commit()
-            self._json(200, {"regiments": list_squad_meta(conn), "members": list_members(conn)})
+            self._json(
+                200,
+                {
+                    "regiments": list_squad_meta(conn, cid),
+                    "members": list_members(conn, cid),
+                },
+            )
         finally:
             conn.close()
 
@@ -1377,13 +1815,17 @@ class Handler(SimpleHTTPRequestHandler):
             return
         conn = get_db()
         try:
+            cid = resolve_club_id(conn, data.get("clubId") or self._club_param())
             for mv in moves:
                 if not isinstance(mv, dict):
                     continue
                 mid = str(mv.get("memberId") or "").strip()
                 if not mid:
                     continue
-                row = conn.execute("SELECT * FROM members WHERE id = ?", (mid,)).fetchone()
+                row = conn.execute(
+                    "SELECT * FROM members WHERE id = ? AND club_id = ?",
+                    (mid, cid),
+                ).fetchone()
                 if not row:
                     self._json(404, {"error": "成员不存在: " + mid})
                     return
@@ -1414,20 +1856,21 @@ class Handler(SimpleHTTPRequestHandler):
                 if squad == "未编组" or (team is None):
                     pass
                 meta = conn.execute(
-                    "SELECT id FROM squad_meta WHERE leader_id = ?", (mid,)
+                    "SELECT id, club_id FROM squad_meta WHERE leader_id = ?",
+                    (mid,),
                 ).fetchone()
                 if meta and meta["id"] != squad:
                     conn.execute(
-                        "UPDATE squad_meta SET leader_id=NULL WHERE id=?",
-                        (meta["id"],),
+                        "UPDATE squad_meta SET leader_id=NULL WHERE club_id=? AND id=?",
+                        (meta["club_id"], meta["id"]),
                     )
             conn.commit()
             self._json(
                 200,
                 {
                     "ok": True,
-                    "regiments": list_squad_meta(conn),
-                    "members": list_members(conn),
+                    "regiments": list_squad_meta(conn, cid),
+                    "members": list_members(conn, cid),
                 },
             )
         finally:
@@ -1692,7 +2135,190 @@ class Handler(SimpleHTTPRequestHandler):
             return
         conn = get_db()
         try:
-            self._json(200, {"members": list_members(conn)})
+            cid = resolve_club_id(conn, self._club_param())
+            self._json(200, {"clubId": cid, "members": list_members(conn, cid)})
+        finally:
+            conn.close()
+
+    def _migrate_queue_payload(self, conn: sqlite3.Connection) -> dict:
+        ensure_migrate_schema(conn)
+        ensure_org_schema(conn)
+        clubs = {c["id"]: c for c in list_clubs(conn)}
+        leaders = load_leader_ids(conn)
+        rows = conn.execute(
+            """
+            SELECT m.*, q.from_club_id AS q_from_club_id, q.created_at AS q_created_at
+            FROM migrate_queue q
+            JOIN members m ON m.id = q.member_id
+            ORDER BY q.created_at DESC, m.name
+            """
+        ).fetchall()
+        items = []
+        for r in rows:
+            m = member_row(r, leaders)
+            from_id = (r["q_from_club_id"] if "q_from_club_id" in r.keys() else "") or m.get("clubId") or ""
+            club = clubs.get(from_id) or {}
+            items.append(
+                {
+                    **m,
+                    "fromClubId": from_id,
+                    "fromClubName": club.get("name") or from_id or "未知",
+                    "queuedAt": int(r["q_created_at"] or 0),
+                }
+            )
+        return {"items": items, "count": len(items)}
+
+    def api_migrate_queue_list(self) -> None:
+        if not self._require_admin():
+            return
+        conn = get_db()
+        try:
+            self._json(200, self._migrate_queue_payload(conn))
+        finally:
+            conn.close()
+
+    def api_migrate_queue_add(self) -> None:
+        if not self._require_admin():
+            return
+        data = self._read_json()
+        ids = data.get("memberIds") or data.get("ids") or []
+        if isinstance(ids, str):
+            ids = [ids]
+        if not isinstance(ids, list) or not ids:
+            self._json(400, {"error": "请选择要加入待迁区的成员"})
+            return
+        conn = get_db()
+        try:
+            ensure_migrate_schema(conn)
+            added = 0
+            for mid in ids:
+                mid = str(mid or "").strip()
+                if not mid:
+                    continue
+                row = conn.execute("SELECT id, club_id FROM members WHERE id = ?", (mid,)).fetchone()
+                if not row:
+                    continue
+                from_cid = (row["club_id"] or "") or get_main_club_id(conn)
+                conn.execute(
+                    """
+                    INSERT INTO migrate_queue(member_id, from_club_id, created_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(member_id) DO UPDATE SET
+                      from_club_id=excluded.from_club_id,
+                      created_at=excluded.created_at
+                    """,
+                    (mid, from_cid, now_ts()),
+                )
+                added += 1
+            conn.commit()
+            payload = self._migrate_queue_payload(conn)
+            payload["added"] = added
+            self._json(200, payload)
+        finally:
+            conn.close()
+
+    def api_migrate_queue_remove(self) -> None:
+        if not self._require_admin():
+            return
+        data = self._read_json()
+        ids = data.get("memberIds") or data.get("ids") or []
+        if isinstance(ids, str):
+            ids = [ids]
+        clear_all = bool(data.get("all"))
+        conn = get_db()
+        try:
+            ensure_migrate_schema(conn)
+            if clear_all:
+                conn.execute("DELETE FROM migrate_queue")
+            elif isinstance(ids, list) and ids:
+                for mid in ids:
+                    conn.execute(
+                        "DELETE FROM migrate_queue WHERE member_id = ?",
+                        (str(mid),),
+                    )
+            else:
+                self._json(400, {"error": "请指定要移出待迁区的成员"})
+                return
+            conn.commit()
+            self._json(200, self._migrate_queue_payload(conn))
+        finally:
+            conn.close()
+
+    def api_members_migrate(self) -> None:
+        """将待迁区（或指定成员）迁入目标俱乐部，并移出待迁区。"""
+        if not self._require_admin():
+            return
+        data = self._read_json()
+        conn = get_db()
+        try:
+            ensure_migrate_schema(conn)
+            ensure_org_schema(conn)
+            ensure_member_join_schema(conn)
+            target = resolve_club_id(conn, data.get("targetClubId") or data.get("clubId"))
+            club_row = conn.execute("SELECT id, name FROM clubs WHERE id = ?", (target,)).fetchone()
+            if not club_row:
+                self._json(400, {"error": "目标俱乐部不存在"})
+                return
+            ids = data.get("memberIds") or data.get("ids") or []
+            if isinstance(ids, str):
+                ids = [ids]
+            if not isinstance(ids, list) or not ids:
+                # 默认迁入待迁区全部
+                ids = [
+                    r["member_id"]
+                    for r in conn.execute("SELECT member_id FROM migrate_queue").fetchall()
+                ]
+            if not ids:
+                self._json(400, {"error": "待迁区为空"})
+                return
+
+            moved = []
+            skipped = []
+            for mid in ids:
+                mid = str(mid or "").strip()
+                if not mid:
+                    continue
+                row = conn.execute("SELECT * FROM members WHERE id = ?", (mid,)).fetchone()
+                if not row:
+                    skipped.append({"id": mid, "reason": "不存在"})
+                    continue
+                keys = row.keys()
+                from_cid = (row["club_id"] if "club_id" in keys else "") or ""
+                if from_cid == target:
+                    # 已在目标俱乐部：仅移出待迁区
+                    conn.execute("DELETE FROM migrate_queue WHERE member_id = ?", (mid,))
+                    skipped.append({"id": mid, "name": row["name"], "reason": "已在目标俱乐部"})
+                    continue
+                # 清旧俱乐部编组 / 团长
+                conn.execute(
+                    "UPDATE squad_meta SET leader_id=NULL WHERE leader_id = ?",
+                    (mid,),
+                )
+                conn.execute(
+                    """
+                    UPDATE members
+                    SET club_id=?, squad=?, team=NULL, slot=NULL
+                    WHERE id=?
+                    """,
+                    (target, "未编组", mid),
+                )
+                conn.execute("DELETE FROM migrate_queue WHERE member_id = ?", (mid,))
+                moved.append(
+                    {
+                        "id": mid,
+                        "name": row["name"],
+                        "fromClubId": from_cid,
+                        "toClubId": target,
+                    }
+                )
+            conn.commit()
+            payload = self._migrate_queue_payload(conn)
+            payload["moved"] = moved
+            payload["skipped"] = skipped
+            payload["targetClubId"] = target
+            payload["targetClubName"] = club_row["name"]
+            payload["members"] = list_members(conn, target)
+            self._json(200, payload)
         finally:
             conn.close()
 
@@ -1705,23 +2331,28 @@ class Handler(SimpleHTTPRequestHandler):
             self._json(400, {"error": "姓名不能为空"})
             return
         mid = data.get("id") or uid()
-        member = {
-            "id": mid,
-            "name": name,
-            "squad": data.get("squad") or "未编组",
-            "pathway": data.get("pathway") or "歌颂者",
-            "score": max(0, int(data.get("score") or 0)),
-            "status": data.get("status") or "在帮",
-            "team": None,
-            "slot": None,
-            "isLeader": False,
-        }
-        if member["squad"] not in REGIMENT_IDS and member["squad"] != "未编组":
-            member["squad"] = "未编组"
+        joined_at = _normalize_joined_at(data.get("joinedAt") or data.get("joined_at"))
         conn = get_db()
         try:
+            ensure_member_join_schema(conn)
+            cid = resolve_club_id(conn, data.get("clubId") or self._club_param())
+            member = {
+                "id": mid,
+                "name": name,
+                "squad": data.get("squad") or "未编组",
+                "pathway": data.get("pathway") or "歌颂者",
+                "score": max(0, int(data.get("score") or 0)),
+                "status": data.get("status") or "在帮",
+                "team": None,
+                "slot": None,
+                "clubId": cid,
+                "joinedAt": joined_at,
+                "isLeader": False,
+            }
+            if member["squad"] not in REGIMENT_IDS and member["squad"] != "未编组":
+                member["squad"] = "未编组"
             conn.execute(
-                "INSERT INTO members(id, name, squad, pathway, score, status, team, slot) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)",
+                "INSERT INTO members(id, name, squad, pathway, score, status, team, slot, club_id, joined_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
                 (
                     member["id"],
                     member["name"],
@@ -1729,10 +2360,152 @@ class Handler(SimpleHTTPRequestHandler):
                     member["pathway"],
                     member["score"],
                     member["status"],
+                    cid,
+                    joined_at or None,
                 ),
             )
             conn.commit()
             self._json(200, {"member": member})
+        finally:
+            conn.close()
+
+    def api_members_ocr(self) -> None:
+        """成员名单截图 / 文本 OCR → 候选姓名列表。"""
+        if not self._require_admin():
+            return
+        data = self._read_json()
+        text = (data.get("text") or "").strip()
+        image_b64 = data.get("imageBase64") or data.get("image") or ""
+        try:
+            if text:
+                candidates, raw_lines = ocr_util.parse_roster_text(text)
+                engine = "text"
+            else:
+                if not image_b64:
+                    self._json(400, {"error": "请上传截图或粘贴文本"})
+                    return
+                if not ocr_util.ocr_configured():
+                    self._json(
+                        503,
+                        {
+                            "error": "未配置腾讯云 OCR 密钥",
+                            "code": "ocr_not_configured",
+                        },
+                    )
+                    return
+                result = ocr_util.recognize_and_parse_roster(str(image_b64))
+                candidates = result.get("candidates") or []
+                raw_lines = result.get("rawLines") or []
+                engine = result.get("engine") or "OCR"
+            self._json(
+                200,
+                {
+                    "engine": engine,
+                    "candidates": candidates,
+                    "rawLines": raw_lines[:80],
+                    "ocrReady": ocr_util.ocr_configured(),
+                },
+            )
+        except ocr_util.OcrApiError as e:
+            self._json(
+                502,
+                {
+                    "error": e.message or "OCR 失败",
+                    "code": e.code or "tencent_ocr_failed",
+                },
+            )
+        except Exception as e:
+            self._json(
+                500,
+                {
+                    "error": "识别失败：" + str(e),
+                    "code": "tencent_ocr_failed",
+                },
+            )
+
+    def api_members_batch(self) -> None:
+        """批量录入 OCR 识别出的成员（跳过同名）。"""
+        if not self._require_admin():
+            return
+        data = self._read_json()
+        items = data.get("members") or data.get("candidates") or []
+        if not isinstance(items, list) or not items:
+            self._json(400, {"error": "没有可录入的成员"})
+            return
+        joined_default = _normalize_joined_at(data.get("joinedAt") or data.get("joined_at"))
+        conn = get_db()
+        try:
+            ensure_member_join_schema(conn)
+            cid = resolve_club_id(conn, data.get("clubId") or self._club_param())
+            existing = {
+                (r["name"] or "").strip()
+                for r in conn.execute(
+                    "SELECT name FROM members WHERE club_id = ?", (cid,)
+                ).fetchall()
+            }
+            created = []
+            skipped = []
+            for item in items:
+                if isinstance(item, str):
+                    name = item.strip()
+                    pathway = "歌颂者"
+                    score = 0
+                    joined_at = joined_default
+                elif isinstance(item, dict):
+                    name = str(item.get("name") or "").strip()
+                    pathway = str(item.get("pathway") or "歌颂者").strip() or "歌颂者"
+                    score = max(0, int(item.get("score") or 0))
+                    joined_at = _normalize_joined_at(
+                        item.get("joinedAt") or item.get("joined_at") or joined_default
+                    )
+                else:
+                    continue
+                if not name:
+                    continue
+                if name in existing:
+                    skipped.append(name)
+                    continue
+                mid = uid()
+                conn.execute(
+                    "INSERT INTO members(id, name, squad, pathway, score, status, team, slot, club_id, joined_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
+                    (
+                        mid,
+                        name,
+                        "未编组",
+                        pathway if pathway in (
+                            "歌颂者", "奶妈", "占卜家", "学徒", "战士", "窥秘人"
+                        ) else "歌颂者",
+                        score,
+                        "在帮",
+                        cid,
+                        joined_at or None,
+                    ),
+                )
+                existing.add(name)
+                created.append(
+                    {
+                        "id": mid,
+                        "name": name,
+                        "squad": "未编组",
+                        "pathway": pathway,
+                        "score": score,
+                        "status": "在帮",
+                        "team": None,
+                        "slot": None,
+                        "clubId": cid,
+                        "joinedAt": joined_at,
+                        "isLeader": False,
+                    }
+                )
+            conn.commit()
+            self._json(
+                200,
+                {
+                    "created": created,
+                    "skipped": skipped,
+                    "members": list_members(conn, cid),
+                },
+            )
         finally:
             conn.close()
 
@@ -1751,6 +2524,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not name:
                 self._json(400, {"error": "姓名不能为空"})
                 return
+            ensure_member_join_schema(conn)
             squad = data.get("squad", row["squad"])
             pathway = data.get("pathway", row["pathway"])
             score = max(0, int(data.get("score", row["score"]) or 0))
@@ -1758,6 +2532,11 @@ class Handler(SimpleHTTPRequestHandler):
             keys = row.keys()
             team = _team_slot(row["team"] if "team" in keys else None)
             slot = _team_slot(row["slot"] if "slot" in keys else None)
+            joined_at = ""
+            if "joined_at" in keys:
+                joined_at = (row["joined_at"] or "") or ""
+            if "joinedAt" in data or "joined_at" in data:
+                joined_at = _normalize_joined_at(data.get("joinedAt", data.get("joined_at")))
             if "team" in data:
                 team = _team_slot(data.get("team"))
             if "slot" in data:
@@ -1772,8 +2551,8 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 team, slot = None, None
             conn.execute(
-                "UPDATE members SET name=?, squad=?, pathway=?, score=?, status=?, team=?, slot=? WHERE id=?",
-                (name, squad, pathway, score, status, team, slot, mid),
+                "UPDATE members SET name=?, squad=?, pathway=?, score=?, status=?, team=?, slot=?, joined_at=? WHERE id=?",
+                (name, squad, pathway, score, status, team, slot, joined_at or None, mid),
             )
             # 移出战团时清团长
             meta = conn.execute(
@@ -1786,6 +2565,7 @@ class Handler(SimpleHTTPRequestHandler):
                 )
             conn.commit()
             leaders = load_leader_ids(conn)
+            club_id = (row["club_id"] if "club_id" in keys else "") or ""
             member = {
                 "id": mid,
                 "name": name,
@@ -1795,6 +2575,8 @@ class Handler(SimpleHTTPRequestHandler):
                 "status": status,
                 "team": team,
                 "slot": slot,
+                "clubId": club_id,
+                "joinedAt": joined_at,
                 "isLeader": mid in leaders,
             }
             self._json(200, {"member": member})
@@ -1819,7 +2601,8 @@ class Handler(SimpleHTTPRequestHandler):
     def api_list_events(self) -> None:
         conn = get_db()
         try:
-            self._json(200, {"events": list_events(conn)})
+            cid = resolve_club_id(conn, self._club_param())
+            self._json(200, {"clubId": cid, "events": list_events(conn, cid)})
         finally:
             conn.close()
 
@@ -1836,13 +2619,14 @@ class Handler(SimpleHTTPRequestHandler):
         eid = data.get("id") or uid()
         conn = get_db()
         try:
+            cid = resolve_club_id(conn, data.get("clubId") or self._club_param())
             conn.execute(
-                "INSERT INTO events(id, date, name, note) VALUES (?, ?, ?, ?)",
-                (eid, date, name, note),
+                "INSERT INTO events(id, date, name, note, club_id) VALUES (?, ?, ?, ?, ?)",
+                (eid, date, name, note, cid),
             )
             conn.commit()
-            ev = {"id": eid, "date": date, "name": name, "note": note, "records": {}}
-            self._json(200, {"event": ev})
+            row = conn.execute("SELECT * FROM events WHERE id = ?", (eid,)).fetchone()
+            self._json(200, {"event": event_dict(conn, row)})
         finally:
             conn.close()
 
@@ -1956,8 +2740,12 @@ class Handler(SimpleHTTPRequestHandler):
                 if not name:
                     continue
                 mid = str(m.get("id") or uid())
+                ensure_member_join_schema(conn)
+                ensure_org_schema(conn)
+                cid = resolve_club_id(conn, m.get("clubId") or m.get("club_id"))
+                joined_at = _normalize_joined_at(m.get("joinedAt") or m.get("joined_at"))
                 conn.execute(
-                    "INSERT INTO members(id, name, squad, pathway, score, status, team, slot) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO members(id, name, squad, pathway, score, status, team, slot, club_id, joined_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         mid,
                         name,
@@ -1967,6 +2755,8 @@ class Handler(SimpleHTTPRequestHandler):
                         m.get("status") or "在帮",
                         _team_slot(m.get("team")),
                         _team_slot(m.get("slot")),
+                        cid,
+                        joined_at or None,
                     ),
                 )
             for ev in events_in:
