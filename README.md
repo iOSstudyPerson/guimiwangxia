@@ -71,6 +71,24 @@ cp deploy/ship.env.example deploy/ship.local.env
 发布前请确认：本机能 `git push`，且能 SSH 登录 `root@139.224.224.26`。  
 发布后请浏览器强制刷新（Cmd+Shift+R）打开：http://139.224.224.26:8765/
 
+若 `ship.sh` 在「更新云服务器」步骤报 `Permission denied`，说明本机还没配好 SSH 免密登录。可先手动测：
+
+```bash
+ssh root@139.224.224.26
+```
+
+通了之后，把密钥写进 `deploy/ship.local.env`（可选）：
+
+```bash
+DEPLOY_SSH_OPTS="-o ConnectTimeout=20 -i ~/.ssh/你的私钥"
+```
+
+然后再执行：
+
+```bash
+./deploy/ship.sh --server-only
+```
+
 ### 1. 本机改代码并自测
 
 ```bash
