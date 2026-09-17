@@ -6,7 +6,7 @@
 <title>王下七武海 · 俱乐部管理</title>
 <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Serif+SC:wght@400;600;700;900&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-<link rel="stylesheet" href="css/styles.css?v=20260916d">
+<link rel="stylesheet" href="css/styles.css?v=20260917e">
 </head>
 <body data-theme="mist" data-page="overview" class="is-guest">
 <div class="app">
@@ -29,7 +29,7 @@
         <svg viewBox="0 0 24 24"><path d="M4 4h16v4H4z"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
         成员档案
       </div>
-      <div class="nav-item" data-page="squads" data-admin-only="1">
+      <div class="nav-item" data-page="squads">
         <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.7-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.5" cy="9" r="2.6"/><path d="M15.5 14.2c2.6.3 4.4 1.9 5 4.8"/></svg>
         团队编组
       </div>
@@ -40,10 +40,6 @@
       <div class="nav-item" data-page="league" data-admin-only="1">
         <svg viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg>
         联赛分析
-      </div>
-      <div class="nav-item" data-page="forum">
-        <svg viewBox="0 0 24 24"><path d="M4 5h16v10H8l-4 4z"/></svg>
-        论坛分享
       </div>
       <div class="nav-item" data-page="settings" data-admin-only="1">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/></svg>
@@ -92,11 +88,22 @@
         <div class="rule"></div>
       </div>
 
-      <div class="event-banner" id="eventBanner" hidden>
+      <div class="event-banner" id="eventBanner">
         <div class="event-banner-head">
-          <span class="en">Upcoming</span>
-          <h3>近期活动</h3>
+          <div class="event-banner-title">
+            <span class="en">Schedule</span>
+            <h3>活动日程</h3>
+          </div>
+          <span class="event-cal-count" id="eventCalCount" hidden></span>
           <div class="panel-link" data-goto="dkp">前往 DKP <svg viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6"/></svg></div>
+        </div>
+        <div class="event-cal">
+          <button type="button" class="event-cal-nav" id="eventCalPrev" aria-label="前一天">‹</button>
+          <div class="event-cal-day">
+            <div class="event-cal-date" id="eventCalDate">—</div>
+            <div class="event-cal-week" id="eventCalWeek"></div>
+          </div>
+          <button type="button" class="event-cal-nav" id="eventCalNext" aria-label="后一天">›</button>
         </div>
         <div class="event-banner-list" id="eventBannerList"></div>
       </div>
@@ -329,6 +336,22 @@
   </div>
 </div>
 
+<!-- ===== 俱乐部改名弹窗 ===== -->
+<div class="modal-mask" id="clubRenameMask">
+  <div class="modal" style="width:min(380px,100%)">
+    <div class="m-close" id="clubRenameClose"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+    <h3>修改俱乐部名称</h3>
+    <div class="m-sub" id="clubRenameSub">BEYONDERS' ARCHIVE</div>
+    <div class="member-grid" style="margin-top:16px">
+      <div class="field full">
+        <label>新名称 <span style="color:var(--gold)">*</span></label>
+        <input id="clubRenameInput" maxlength="40" placeholder="俱乐部名称">
+      </div>
+    </div>
+    <div class="btn primary" id="clubRenameSave" style="margin-top:8px">确 认</div>
+  </div>
+</div>
+
 <!-- ===== 新建/编辑活动 ===== -->
 <div class="modal-mask" id="eventMask">
   <div class="modal member-modal">
@@ -337,12 +360,19 @@
     <div class="m-sub">BEYONDERS' ARCHIVE · 活动考勤</div>
     <div class="member-grid">
       <div class="field"><label>日期 <span style="color:var(--gold)">*</span></label><input id="evDate" type="date"></div>
+      <div class="field"><label>开始时间</label><input id="evStartTime" type="time" step="60"></div>
+      <div class="field"><label>结束时间</label><input id="evEndTime" type="time" step="60"></div>
       <div class="field"><label>活动类型 <span style="color:var(--gold)">*</span></label>
         <select id="evType">
           <option value="终末猎杀">终末猎杀</option>
+          <option value="终末猎杀(战略)">终末猎杀(战略)</option>
+          <option value="俱乐部乱斗">俱乐部乱斗</option>
+          <option value="征服宣令(战略)">征服宣令(战略)</option>
+          <option value="猎城战">猎城战</option>
+          <option value="猎城战(战略)">猎城战(战略)</option>
+          <option value="霜陨领主(战略)">霜陨领主(战略)</option>
           <option value="四方联赛">四方联赛</option>
           <option value="俱乐部宣战">俱乐部宣战</option>
-          <option value="猎城战">猎城战</option>
           <option value="高原战">高原战</option>
           <option value="其他">其他</option>
         </select>
@@ -402,14 +432,14 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="js/data.js?v=20260916d"></script>
-<script src="js/api.js?v=20260916d"></script>
-<script src="js/org.js?v=20260916d"></script>
-<script src="js/members.js?v=20260916d"></script>
-<script src="js/attendance.js?v=20260916d"></script>
-<script src="js/squads.js?v=20260916d"></script>
-<script src="js/league.js?v=20260916d"></script>
-<script src="js/forum.js?v=20260916d"></script>
-<script src="js/app.js?v=20260916d"></script>
+<script src="js/data.js?v=20260917e"></script>
+<script src="js/api.js?v=20260917e"></script>
+<script src="js/org.js?v=20260917e"></script>
+<script src="js/members.js?v=20260917e"></script>
+<script src="js/attendance.js?v=20260917e"></script>
+<script src="js/squads.js?v=20260917e"></script>
+<script src="js/league.js?v=20260917e"></script>
+<script src="js/forum.js?v=20260917e"></script>
+<script src="js/app.js?v=20260917e"></script>
 </body>
 </html>

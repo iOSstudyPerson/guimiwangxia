@@ -132,6 +132,7 @@ def init_db() -> None:
     ensure_squad_schema(conn)
     ensure_org_schema(conn)
     ensure_member_join_schema(conn)
+    ensure_event_time_schema(conn)
     ensure_migrate_schema(conn)
     ensure_league_schema(conn)
     conn.commit()
@@ -143,6 +144,33 @@ def ensure_member_join_schema(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(members)").fetchall()}
     if "joined_at" not in cols:
         conn.execute("ALTER TABLE members ADD COLUMN joined_at TEXT")
+
+
+def ensure_event_time_schema(conn: sqlite3.Connection) -> None:
+    """活动开始/结束时间 HH:MM。"""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(events)").fetchall()}
+    if "start_time" not in cols:
+        conn.execute("ALTER TABLE events ADD COLUMN start_time TEXT")
+    if "end_time" not in cols:
+        conn.execute("ALTER TABLE events ADD COLUMN end_time TEXT")
+
+
+def _normalize_event_time(val) -> str:
+    """规范化为 HH:MM；兼容浏览器 type=time 返回的 HH:MM:SS；空则空串。"""
+    s = str(val or "").strip()
+    if not s:
+        return ""
+    m = re.match(r"^(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$", s)
+    if not m:
+        return ""
+    h, mi = int(m.group(1)), int(m.group(2))
+    if not (0 <= h <= 23 and 0 <= mi <= 59):
+        return ""
+    return f"{h:02d}:{mi:02d}"
+
+
+def _normalize_start_time(val) -> str:
+    return _normalize_event_time(val)
 
 
 def ensure_migrate_schema(conn: sqlite3.Connection) -> None:
@@ -1172,11 +1200,19 @@ def event_dict(conn: sqlite3.Connection, r: sqlite3.Row) -> dict:
         records[row["member_id"]] = row["status"]
     keys = r.keys()
     club_id = (r["club_id"] if "club_id" in keys else "") or ""
+    start_time = ""
+    end_time = ""
+    if "start_time" in keys:
+        start_time = _normalize_event_time(r["start_time"])
+    if "end_time" in keys:
+        end_time = _normalize_event_time(r["end_time"])
     return {
         "id": r["id"],
         "date": r["date"],
         "name": r["name"],
         "note": r["note"] or "",
+        "startTime": start_time,
+        "endTime": end_time,
         "clubId": club_id,
         "records": records,
     }
@@ -1195,9 +1231,10 @@ def list_members(conn: sqlite3.Connection, club_id: str | None = None) -> list:
 
 def list_events(conn: sqlite3.Connection, club_id: str | None = None) -> list:
     ensure_org_schema(conn)
+    ensure_event_time_schema(conn)
     cid = resolve_club_id(conn, club_id)
     rows = conn.execute(
-        "SELECT * FROM events WHERE club_id = ? ORDER BY date DESC, id DESC",
+        "SELECT * FROM events WHERE club_id = ? ORDER BY date DESC, COALESCE(start_time, '99:99'), id DESC",
         (cid,),
     ).fetchall()
     return [event_dict(conn, r) for r in rows]
@@ -1670,11 +1707,13 @@ class Handler(SimpleHTTPRequestHandler):
                     "date": e["date"],
                     "name": e["name"],
                     "note": e.get("note") or "",
+                    "startTime": e.get("startTime") or "",
+                    "endTime": e.get("endTime") or "",
                 }
                 for e in list_events(conn, cid)
                 if (e.get("date") or "") >= today
             ]
-            active.sort(key=lambda x: (x["date"], x["name"]))
+            active.sort(key=lambda x: (x["date"], x.get("startTime") or "99:99", x["name"]))
             self._json(
                 200,
                 {
@@ -1693,7 +1732,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "avgScoreNum": overview["avgScoreNum"],
                     "pathways": pathways,
                     "readiness": [{"group": club_name, "squads": squads}],
-                    "activeEvents": active[:8],
+                    "activeEvents": active[:40],
                 },
             )
         finally:
@@ -2613,16 +2652,19 @@ class Handler(SimpleHTTPRequestHandler):
         date = (data.get("date") or "").strip()
         name = (data.get("name") or "").strip()
         note = (data.get("note") or "").strip()
+        start_time = _normalize_event_time(data.get("startTime") or data.get("start_time"))
+        end_time = _normalize_event_time(data.get("endTime") or data.get("end_time"))
         if not date or not name:
             self._json(400, {"error": "日期与活动名称必填"})
             return
         eid = data.get("id") or uid()
         conn = get_db()
         try:
+            ensure_event_time_schema(conn)
             cid = resolve_club_id(conn, data.get("clubId") or self._club_param())
             conn.execute(
-                "INSERT INTO events(id, date, name, note, club_id) VALUES (?, ?, ?, ?, ?)",
-                (eid, date, name, note, cid),
+                "INSERT INTO events(id, date, name, note, club_id, start_time, end_time) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (eid, date, name, note, cid, start_time or None, end_time or None),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM events WHERE id = ?", (eid,)).fetchone()
@@ -2636,13 +2678,27 @@ class Handler(SimpleHTTPRequestHandler):
         data = self._read_json()
         conn = get_db()
         try:
+            ensure_event_time_schema(conn)
             row = conn.execute("SELECT * FROM events WHERE id = ?", (eid,)).fetchone()
             if not row:
                 self._json(404, {"error": "活动不存在"})
                 return
+            keys = row.keys()
             date = (data.get("date") if "date" in data else row["date"]) or ""
             name = (data.get("name") if "name" in data else row["name"]) or ""
             note = data.get("note") if "note" in data else (row["note"] or "")
+            if "startTime" in data or "start_time" in data:
+                start_time = _normalize_event_time(data.get("startTime", data.get("start_time")))
+            elif "start_time" in keys:
+                start_time = _normalize_event_time(row["start_time"])
+            else:
+                start_time = ""
+            if "endTime" in data or "end_time" in data:
+                end_time = _normalize_event_time(data.get("endTime", data.get("end_time")))
+            elif "end_time" in keys:
+                end_time = _normalize_event_time(row["end_time"])
+            else:
+                end_time = ""
             date = str(date).strip()
             name = str(name).strip()
             note = str(note).strip()
@@ -2650,8 +2706,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self._json(400, {"error": "日期与活动名称必填"})
                 return
             conn.execute(
-                "UPDATE events SET date=?, name=?, note=? WHERE id=?",
-                (date, name, note, eid),
+                "UPDATE events SET date=?, name=?, note=?, start_time=?, end_time=? WHERE id=?",
+                (date, name, note, start_time or None, end_time or None, eid),
             )
             conn.commit()
             self._json(200, {"event": event_dict(conn, conn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone())})

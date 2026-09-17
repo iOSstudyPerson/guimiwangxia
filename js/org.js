@@ -34,22 +34,20 @@ function updateClubChrome(){
   const c = activeClub();
   const title = document.getElementById('tbClubTitle');
   const sub = document.getElementById('tbClubSub');
+  const brandH1 = document.querySelector('.brand-name h1');
   const name = c ? c.name : '王下七武海';
   const kind = c && c.kind === 'main' ? '主俱乐部' : '附属俱乐部';
   if (title) title.textContent = name + ' · 俱乐部管理';
-  if (sub) sub.textContent = kind + '数据 · 论坛为全公会共享';
+  if (sub) sub.textContent = kind + '数据总览';
+  // 侧栏品牌跟当前俱乐部走（主/附属切换时可见）
+  if (brandH1) brandH1.textContent = name;
 }
 
 function paintClubSwitcher(){
   const wrap = document.getElementById('clubSwitcher');
   const sel = document.getElementById('clubSelect');
   if (!wrap || !sel) return;
-  const isAdmin = typeof loggedIn !== 'undefined' && loggedIn;
-  if (!isAdmin) {
-    wrap.hidden = true;
-    return;
-  }
-  // 无附属时也展示主俱乐部；API 未返回时用本地兜底
+  // 游客也可切换查看附属俱乐部
   if (!orgClubs.length) {
     orgClubs = [{ id: 'main', name: '王下七武海', kind: 'main', note: '' }];
   }
@@ -65,7 +63,6 @@ function paintClubSwitcher(){
       esc(c.name) + (c.kind === 'main' ? '（主）' : '（附属）') +
     '</option>'
   ).join('');
-  // 强制同步显示值（部分浏览器空 options 后不刷新）
   sel.value = String(activeClubId || (orgClubs[0] && orgClubs[0].id) || 'main');
 }
 
@@ -150,8 +147,8 @@ document.getElementById('clubSelect')?.addEventListener('change', async (e) => {
 function renderOrgSettingsBlocks(canWrite){
   const clubsHtml =
     '<div class="settings-card">' +
-      '<h3>附属俱乐部</h3>' +
-      '<p class="settings-desc">主俱乐部固定为「王下七武海」。可新增附属俱乐部并切换录入成员 / DKP / 编组。论坛不受切换影响。</p>' +
+      '<h3>俱乐部</h3>' +
+      '<p class="settings-desc">可修改主/附属俱乐部名称；新增附属俱乐部后，用顶栏切换查看与录入。成员 / DKP / 编组按俱乐部隔离。</p>' +
       '<div class="org-list" id="settingsClubList"></div>' +
       (canWrite
         ? '<div class="org-add-row">' +
@@ -164,7 +161,7 @@ function renderOrgSettingsBlocks(canWrite){
   const alliesHtml =
     '<div class="settings-card">' +
       '<h3>同盟</h3>' +
-      '<p class="settings-desc">同盟展示在总览页，全公会可见。</p>' +
+      '<p class="settings-desc">同盟展示在总览页，仅管理员可见。</p>' +
       '<div class="org-list" id="settingsAllyList"></div>' +
       (canWrite
         ? '<div class="org-add-row">' +
@@ -183,9 +180,16 @@ function paintOrgSettingsLists(canWrite){
   if (clubBox) {
     clubBox.innerHTML = orgClubs.map(c =>
       '<div class="org-row">' +
-        '<div><b>' + esc(c.name) + '</b>' +
-          (c.kind === 'main' ? ' <span class="home-tag">主</span>' : ' <span class="home-tag" style="opacity:.7">附属</span>') +
+        '<div class="org-row-main">' +
+          '<div class="org-row-title"><b>' + esc(c.name) + '</b>' +
+            (c.kind === 'main' ? ' <span class="home-tag">主</span>' : ' <span class="home-tag" style="opacity:.7">附属</span>') +
+          '</div>' +
           (c.note ? ('<div class="m">' + esc(c.note) + '</div>') : '') +
+          (canWrite
+            ? '<div class="org-row-actions">' +
+                '<button type="button" class="op" data-rename-club="' + esc(c.id) + '" data-rename-name="' + esc(c.name) + '">改名</button>' +
+              '</div>'
+            : '') +
         '</div>' +
         (canWrite && c.kind !== 'main'
           ? '<button type="button" class="op del" data-del-club="' + esc(c.id) + '">删除</button>'
@@ -213,6 +217,7 @@ function paintOrgSettingsLists(canWrite){
       const res = await api('/api/clubs', { method: 'POST', body: JSON.stringify({ name, note }) });
       orgClubs = res.clubs || [];
       paintClubSwitcher();
+      updateClubChrome();
       paintOrgSettingsLists(true);
       document.getElementById('newClubName').value = '';
       document.getElementById('newClubNote').value = '';
@@ -232,6 +237,11 @@ function paintOrgSettingsLists(canWrite){
       document.getElementById('newAllyNote').value = '';
       toast('已添加同盟');
     } catch (e) { toast(e.message || '添加失败'); }
+  });
+  document.querySelectorAll('[data-rename-club]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      openClubRenameModal(btn.dataset.renameClub, btn.dataset.renameName || '');
+    });
   });
   document.querySelectorAll('[data-del-club]').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -261,3 +271,59 @@ function paintOrgSettingsLists(canWrite){
     });
   });
 }
+
+/* ===================== 俱乐部改名弹窗 ===================== */
+let pendingRenameClubId = null;
+
+function openClubRenameModal(id, currentName){
+  if (!requireWrite('修改俱乐部名称')) return;
+  pendingRenameClubId = id;
+  const club = orgClubs.find(c => String(c.id) === String(id));
+  const kind = club && club.kind === 'main' ? '主俱乐部' : '附属俱乐部';
+  document.getElementById('clubRenameSub').textContent = kind + ' · 修改显示名称';
+  document.getElementById('clubRenameInput').value = currentName || (club && club.name) || '';
+  document.getElementById('clubRenameMask').classList.add('open');
+  setTimeout(() => {
+    const input = document.getElementById('clubRenameInput');
+    input.focus();
+    input.select();
+  }, 60);
+}
+
+function closeClubRenameModal(){
+  document.getElementById('clubRenameMask')?.classList.remove('open');
+  pendingRenameClubId = null;
+}
+
+async function saveClubRename(){
+  if (!requireWrite('修改俱乐部名称')) return;
+  const id = pendingRenameClubId;
+  const name = (document.getElementById('clubRenameInput')?.value || '').trim();
+  if (!id) return;
+  if (!name) { toast('请填写俱乐部名称'); return; }
+  try {
+    const res = await api('/api/clubs/' + encodeURIComponent(id), {
+      method: 'PUT',
+      body: JSON.stringify({ name })
+    });
+    orgClubs = res.clubs || [];
+    paintClubSwitcher();
+    updateClubChrome();
+    closeClubRenameModal();
+    if (typeof renderSettingsPage === 'function') renderSettingsPage();
+    else paintOrgSettingsLists(true);
+    toast('已更名为「' + name + '」');
+  } catch (e) {
+    toast(e.message || '改名失败');
+  }
+}
+
+document.getElementById('clubRenameClose')?.addEventListener('click', closeClubRenameModal);
+document.getElementById('clubRenameSave')?.addEventListener('click', saveClubRename);
+document.getElementById('clubRenameMask')?.addEventListener('click', e => {
+  if (e.target === document.getElementById('clubRenameMask')) closeClubRenameModal();
+});
+document.getElementById('clubRenameInput')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') saveClubRename();
+  if (e.key === 'Escape') closeClubRenameModal();
+});

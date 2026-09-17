@@ -92,7 +92,9 @@ function renderDkpPage(){
 
   const canWrite = typeof loggedIn !== 'undefined' && loggedIn;
   const sorted = attendanceEvents.slice().sort((a, b) =>
-    (b.date || '').localeCompare(a.date || '') || String(b.id).localeCompare(String(a.id))
+    (b.date || '').localeCompare(a.date || '') ||
+    (b.startTime || '').localeCompare(a.startTime || '') ||
+    String(b.id).localeCompare(String(a.id))
   );
   if (countEl) countEl.textContent = sorted.length;
 
@@ -128,7 +130,9 @@ function renderDkpPage(){
     return (
       '<div class="dkp-card" data-event-id="' + esc(ev.id) + '">' +
         '<div class="dkp-card-main">' +
-          '<div class="dkp-date">' + esc(ev.date || '—') + '</div>' +
+          '<div class="dkp-date">' + esc(ev.date || '—') +
+            (formatEventTimeRange(ev) ? (' · ' + esc(formatEventTimeRange(ev))) : '') +
+          '</div>' +
           '<div class="dkp-name">' + esc(ev.name || '未命名活动') + '</div>' +
           (ev.note ? '<div class="dkp-note">' + esc(ev.note) + '</div>' : '') +
         '</div>' +
@@ -142,7 +146,20 @@ function renderDkpPage(){
   }).join('');
 }
 
-const DKP_ACTIVITY_PRESETS = ['终末猎杀', '四方联赛', '俱乐部宣战', '猎城战', '高原战', '其他'];
+const DKP_ACTIVITY_PRESETS = [
+  '终末猎杀', '终末猎杀(战略)', '俱乐部乱斗', '征服宣令(战略)',
+  '猎城战', '猎城战(战略)', '霜陨领主(战略)',
+  '四方联赛', '俱乐部宣战', '高原战', '其他'
+];
+
+function formatEventTimeRange(ev){
+  const start = (ev && ev.startTime) ? String(ev.startTime).trim() : '';
+  const end = (ev && ev.endTime) ? String(ev.endTime).trim() : '';
+  if (start && end) return start + '–' + end;
+  if (start) return start;
+  if (end) return '至 ' + end;
+  return '';
+}
 
 function syncEventNameUI(){
   const type = document.getElementById('evType')?.value || '终末猎杀';
@@ -161,6 +178,8 @@ function openEventModal(ev){
   const isEdit = !!ev;
   document.getElementById('eventModalTitle').textContent = isEdit ? '编辑活动' : '新建活动';
   document.getElementById('evDate').value = ev ? (ev.date || todayStr()) : todayStr();
+  document.getElementById('evStartTime').value = ev && ev.startTime ? ev.startTime : '';
+  document.getElementById('evEndTime').value = ev && ev.endTime ? ev.endTime : '';
   const rawName = ev ? (ev.name || '') : '终末猎杀';
   const typeEl = document.getElementById('evType');
   if (typeEl) {
@@ -192,17 +211,25 @@ function closeEventModal(){
 async function saveEventForm(){
   if (!requireWrite('保存活动')) return;
   const date = document.getElementById('evDate').value;
+  const startTime = (document.getElementById('evStartTime')?.value || '').slice(0, 5);
+  const endTime = (document.getElementById('evEndTime')?.value || '').slice(0, 5);
   const name = resolveEventName();
   const note = document.getElementById('evNote').value.trim();
   if (!date) { toast('请选择活动日期'); return; }
   if (!name) { toast('请填写活动名称'); document.getElementById('evName').focus(); return; }
+  if (startTime && endTime && endTime < startTime) {
+    toast('结束时间不能早于开始时间');
+    document.getElementById('evEndTime')?.focus();
+    return;
+  }
 
+  const payload = { date, name, note, startTime, endTime };
   const editId = document.getElementById('eventMask').dataset.editId;
   try {
     if (editId) {
       const res = await api('/api/events/' + encodeURIComponent(editId), {
         method: 'PUT',
-        body: JSON.stringify({ date, name, note })
+        body: JSON.stringify(payload)
       });
       const idx = attendanceEvents.findIndex(e => String(e.id) === editId);
       if (idx > -1) attendanceEvents[idx] = res.event;
@@ -210,15 +237,17 @@ async function saveEventForm(){
       closeEventModal();
       renderDkpPage();
       if (typeof renderMembers === 'function') renderMembers();
+      if (typeof refreshOverview === 'function') refreshOverview();
     } else {
       const res = await api('/api/events', {
         method: 'POST',
-        body: JSON.stringify(typeof withClubId === 'function' ? withClubId({ date, name, note }) : { date, name, note })
+        body: JSON.stringify(typeof withClubId === 'function' ? withClubId(payload) : payload)
       });
       attendanceEvents.push(res.event);
       toast('已创建活动「' + name + '」');
       closeEventModal();
       renderDkpPage();
+      if (typeof refreshOverview === 'function') refreshOverview();
       openRollCall(res.event.id);
     }
   } catch (err) {
@@ -231,7 +260,11 @@ function openRollCall(eventId){
   if (!ev) { toast('活动不存在'); return; }
   rollCallEventId = ev.id;
   document.getElementById('rollTitle').textContent = ev.name || '点名';
-  document.getElementById('rollSub').textContent = (ev.date || '') + (ev.note ? ' · ' + ev.note : '');
+  const timeLabel = formatEventTimeRange(ev);
+  document.getElementById('rollSub').textContent =
+    (ev.date || '') +
+    (timeLabel ? ' · ' + timeLabel : '') +
+    (ev.note ? ' · ' + ev.note : '');
   const pathSel = document.getElementById('rollPathway');
   if (pathSel && !pathSel.dataset.ready && typeof PATHWAYS !== 'undefined') {
     PATHWAYS.forEach(p => {

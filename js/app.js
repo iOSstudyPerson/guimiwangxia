@@ -46,47 +46,158 @@ function refreshOverview(){
   renderEventBanner(overview);
 }
 
-function renderEventBanner(overview){
-  const box = document.getElementById('eventBanner');
-  const list = document.getElementById('eventBannerList');
-  if (!box || !list) return;
-  const today = (() => {
-    const d = new Date();
-    const p = n => String(n).padStart(2, '0');
-    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
-  })();
+let eventCalOffset = 0; // 相对今天的天数：0=今天，1=明天…
+
+function ymdFromOffset(offset){
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() + (Number(offset) || 0));
+  const p = n => String(n).padStart(2, '0');
+  return {
+    ymd: d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()),
+    week: ['日', '一', '二', '三', '四', '五', '六'][d.getDay()],
+    label: (d.getMonth() + 1) + '月' + d.getDate() + '日'
+  };
+}
+
+function collectUpcomingEvents(overview){
+  const todayInfo = ymdFromOffset(0);
   let events = (overview && overview.activeEvents) || [];
   if (!events.length && typeof attendanceEvents !== 'undefined') {
     events = (attendanceEvents || [])
-      .filter(e => (e.date || '') >= today)
-      .slice()
-      .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.name || '').localeCompare(b.name || '', 'zh'))
-      .slice(0, 8)
-      .map(e => ({ id: e.id, date: e.date, name: e.name, note: e.note || '' }));
+      .filter(e => (e.date || '') >= todayInfo.ymd)
+      .map(e => ({
+        id: e.id,
+        date: e.date,
+        name: e.name,
+        note: e.note || '',
+        startTime: e.startTime || '',
+        endTime: e.endTime || ''
+      }));
   }
-  if (!events.length) {
-    box.hidden = true;
-    list.innerHTML = '';
-    return;
+  return (events || []).slice().sort((a, b) =>
+    (a.date || '').localeCompare(b.date || '') ||
+    (a.startTime || '99:99').localeCompare(b.startTime || '99:99') ||
+    (a.name || '').localeCompare(b.name || '', 'zh')
+  );
+}
+
+function splitEventDisplayName(name){
+  const raw = String(name || '').trim();
+  if (raw.endsWith('(战略)')) {
+    return { title: raw.slice(0, -4), strategic: true };
   }
+  return { title: raw, strategic: false };
+}
+
+function eventKindClass(name){
+  const n = String(name || '');
+  if (n.includes('乱斗')) return 'kind-brawl';
+  if (n.includes('猎杀')) return 'kind-hunt';
+  if (n.includes('宣令') || n.includes('宣战')) return 'kind-order';
+  if (n.includes('猎城')) return 'kind-city';
+  if (n.includes('霜陨') || n.includes('领主')) return 'kind-lord';
+  if (n.includes('联赛') || n.includes('高原')) return 'kind-league';
+  return 'kind-default';
+}
+
+function eventMarkChar(title){
+  const t = String(title || '').trim();
+  return t ? t.charAt(0) : '活';
+}
+
+function renderEventBanner(overview){
+  const box = document.getElementById('eventBanner');
+  const list = document.getElementById('eventBannerList');
+  const dateEl = document.getElementById('eventCalDate');
+  const weekEl = document.getElementById('eventCalWeek');
+  const countEl = document.getElementById('eventCalCount');
+  const prevBtn = document.getElementById('eventCalPrev');
+  if (!box || !list) return;
+
+  if (eventCalOffset < 0) eventCalOffset = 0;
+  const day = ymdFromOffset(eventCalOffset);
+  const all = collectUpcomingEvents(overview);
+  const dayEvents = all.filter(e => e.date === day.ymd);
+
+  if (dateEl) dateEl.textContent = day.label;
+  if (weekEl) {
+    weekEl.innerHTML = eventCalOffset === 0
+      ? ('星期' + day.week + ' <span class="is-today">· 今天</span>')
+      : ('星期' + day.week);
+  }
+  if (prevBtn) prevBtn.disabled = eventCalOffset <= 0;
+  if (countEl) {
+    if (dayEvents.length) {
+      countEl.hidden = false;
+      countEl.textContent = dayEvents.length + ' 场';
+    } else {
+      countEl.hidden = true;
+      countEl.textContent = '';
+    }
+  }
+
   box.hidden = false;
-  list.innerHTML = events.map(e => {
-    const note = (e.note || '').trim();
-    return (
-      '<button type="button" class="event-banner-item" data-eid="' + esc(e.id || '') + '">' +
-        '<span class="eb-date">' + esc(e.date || '') + '</span>' +
-        '<span class="eb-name">' + esc(e.name || '') + '</span>' +
-        (note ? '<span class="eb-note">' + esc(note) + '</span>' : '') +
-      '</button>'
-    );
-  }).join('');
+  if (!dayEvents.length) {
+    list.innerHTML = '<div class="event-cal-empty">这一天暂无活动安排</div>';
+  } else {
+    list.innerHTML = dayEvents.map(e => {
+      const note = (e.note || '').trim();
+      const start = (e.startTime || '').trim();
+      const end = (e.endTime || '').trim();
+      const parsed = splitEventDisplayName(e.name || '');
+      const kind = eventKindClass(e.name || '');
+      const mark = eventMarkChar(parsed.title);
+      const timeHtml = start
+        ? ('<span class="eb-start">' + esc(start) + '</span>' +
+           (end ? '<span class="eb-end">至 ' + esc(end) + '</span>' : ''))
+        : '<span class="eb-pending">待定</span>';
+      const metaBits = [];
+      if (parsed.strategic) metaBits.push('<span class="eb-tag">战略</span>');
+      if (start && end) metaBits.push('<span class="eb-dur">' + esc(start) + ' – ' + esc(end) + '</span>');
+      else if (start) metaBits.push('<span class="eb-dur">' + esc(start) + ' 开始</span>');
+      else metaBits.push('<span class="eb-dur">时间待定</span>');
+      return (
+        '<button type="button" class="event-banner-item ' + kind +
+          (parsed.strategic ? ' is-strategy' : '') +
+          '" data-eid="' + esc(e.id || '') + '">' +
+          '<span class="eb-time">' + timeHtml + '</span>' +
+          '<span class="eb-card">' +
+            '<span class="eb-mark" aria-hidden="true">' + esc(mark) + '</span>' +
+            '<span class="eb-card-main">' +
+              '<span class="eb-name">' + esc(parsed.title || '未命名') + '</span>' +
+              '<span class="eb-meta">' + metaBits.join('') + '</span>' +
+              (note ? '<span class="eb-note">' + esc(note) + '</span>' : '') +
+            '</span>' +
+          '</span>' +
+        '</button>'
+      );
+    }).join('');
+  }
+
   list.querySelectorAll('.event-banner-item').forEach(btn => {
     btn.addEventListener('click', () => {
-      showPage('dkp');
-      toast('活动「' + (btn.querySelector('.eb-name')?.textContent || '') + '」');
+      const name = (btn.querySelector('.eb-name')?.textContent || '').trim();
+      const canGoDkp = typeof loggedIn !== 'undefined' && loggedIn;
+      if (canGoDkp) {
+        showPage('dkp');
+        toast('活动「' + name + '」');
+      } else {
+        toast(name || '活动');
+      }
     });
   });
 }
+
+document.getElementById('eventCalPrev')?.addEventListener('click', () => {
+  if (eventCalOffset <= 0) return;
+  eventCalOffset -= 1;
+  renderEventBanner(typeof currentOverview === 'function' ? currentOverview() : null);
+});
+document.getElementById('eventCalNext')?.addEventListener('click', () => {
+  eventCalOffset += 1;
+  renderEventBanner(typeof currentOverview === 'function' ? currentOverview() : null);
+});
 
 /* ===================== 战团状态渲染 ===================== */
 function renderSquads(overview){
@@ -172,7 +283,12 @@ const squadsPage = document.getElementById('page-squads');
 const leaguePage = document.getElementById('page-league');
 
 function showPage(name){
-  const adminOnly = ['archive', 'squads', 'dkp', 'league', 'settings'];
+  // 论坛已关闭
+  if (name === 'forum') {
+    toast('论坛功能已关闭');
+    name = 'overview';
+  }
+  const adminOnly = ['archive', 'dkp', 'league', 'settings'];
   if (!loggedIn && adminOnly.indexOf(name) >= 0) {
     pendingPageAfterLogin = name;
     openLogin();
@@ -186,17 +302,17 @@ function showPage(name){
   const isArchive = name === 'archive';
   const isDkp = name === 'dkp';
   const isSettings = name === 'settings';
-  const isForum = name === 'forum';
+  const isForum = false;
   const isSquads = name === 'squads';
   const isLeague = name === 'league';
   overviewPage.classList.toggle('active', isOverview);
   archivePage.classList.toggle('active', isArchive);
   if (dkpPage) dkpPage.classList.toggle('active', isDkp);
   if (settingsPage) settingsPage.classList.toggle('active', isSettings);
-  if (forumPage) forumPage.classList.toggle('active', isForum);
+  if (forumPage) forumPage.classList.toggle('active', false);
   if (squadsPage) squadsPage.classList.toggle('active', isSquads);
   if (leaguePage) leaguePage.classList.toggle('active', isLeague);
-  placeholderPage.classList.toggle('active', !isOverview && !isArchive && !isDkp && !isSettings && !isForum && !isSquads && !isLeague);
+  placeholderPage.classList.toggle('active', !isOverview && !isArchive && !isDkp && !isSettings && !isSquads && !isLeague);
   const titleP = document.querySelector('.tb-title p');
   const clubName = (typeof activeClub === 'function' && activeClub()) ? activeClub().name : '王下七武海';
   if (isOverview) {
@@ -226,10 +342,6 @@ function showPage(name){
   } else if (isDkp) {
     if (titleP) titleP.textContent = clubName + ' · DKP管理';
     if (typeof renderDkpPage === 'function') renderDkpPage();
-  } else if (isForum) {
-    if (titleP) titleP.textContent = '王下七武海 · 论坛分享';
-    forumView = forumView || 'list';
-    refreshForum().catch(err => toast(err.message || '加载论坛失败'));
   } else if (isSettings) {
     if (titleP) titleP.textContent = '王下七武海 · 系统设置';
     if (typeof renderSettingsPage === 'function') renderSettingsPage();
@@ -320,7 +432,7 @@ function setLoggedIn(user){
   if (typeof renderSettingsPage === 'function' && settingsPage?.classList.contains('active')) renderSettingsPage();
   if (!loggedIn) {
     const cur = document.querySelector('.nav-item.active')?.dataset.page;
-    if (cur && cur !== 'overview' && cur !== 'forum') showPage('overview');
+    if (cur && cur !== 'overview' && cur !== 'squads') showPage('overview');
   }
 }
 
@@ -422,7 +534,7 @@ function renderSettingsPage(){
     '</div>' +
     '<div class="settings-card">' +
       '<h3>账号说明</h3>' +
-      '<p>管理员账号在服务器环境变量或 <code>.env</code> 中配置。访客仅可看<strong>总览</strong>与<strong>论坛</strong>；成员 / 编组 / DKP / 联赛 / 设置仅管理员可见。</p>' +
+      '<p>管理员账号在服务器环境变量或 <code>.env</code> 中配置。访客可看<strong>总览</strong>与<strong>团队编组</strong>（只读），并用顶栏切换俱乐部；成员档案 / DKP / 联赛 / 设置仅管理员可见。论坛已关闭。</p>' +
       '<p class="settings-hint">当前状态：' + (canWrite ? ('已登录 · ' + esc(adminUsername)) : '访客') + '</p>' +
     '</div>';
 
